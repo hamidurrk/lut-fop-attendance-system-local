@@ -3,7 +3,7 @@ from __future__ import annotations
 import sqlite3
 
 from attendance_app.data import Database
-from attendance_app.models import AttendanceSession, SessionTemplate, Student
+from attendance_app.models import AttendanceSession, BonusRecord, SessionTemplate, Student
 
 
 class DuplicateSessionError(RuntimeError):
@@ -73,10 +73,17 @@ class AttendanceService:
         student: Student,
         *,
         source: str = "manual",
-        payload: str | None = None,
+        a_point: float | None = None,
+        b_point: float | None = None,
+        t_point: float | None = None,
+        status: str = "recorded",
     ) -> int:
         student_identifier = student.student_code.strip()
         student_name = student.display_name if student.display_name != student.student_code else None
+        a_value = float(a_point) if a_point is not None else 0.0
+        b_value = float(b_point) if b_point is not None else 0.0
+        total_value = float(t_point) if t_point is not None else a_value + b_value
+        status_value = status.strip() if status else "recorded"
 
         with self._database.connect() as connection:
             existing = connection.execute(
@@ -90,10 +97,19 @@ class AttendanceService:
             cursor = connection.execute(
                 """
                 INSERT INTO attendance_records (
-                    session_id, student_id, student_name, source, raw_payload
-                ) VALUES (?, ?, ?, ?, ?)
+                    session_id, student_id, student_name, source, a_point, b_point, t_point, status
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (session_id, student_identifier, student_name, source, payload),
+                (
+                    session_id,
+                    student_identifier,
+                    student_name,
+                    source,
+                    a_value,
+                    b_value,
+                    total_value,
+                    status_value,
+                ),
             )
             return int(cursor.lastrowid)
 
@@ -121,6 +137,10 @@ class AttendanceService:
                        ar.student_name,
                        ar.recorded_at,
                        ar.source,
+                       ar.a_point,
+                       ar.b_point,
+                       ar.t_point,
+                       ar.status,
                        s.chapter_code,
                        s.week_number,
                        s.campus_name,
@@ -158,6 +178,26 @@ class AttendanceService:
             )
             for row in rows
         ]
+
+    def record_bonus(
+        self,
+        bonus: BonusRecord,
+    ) -> int:
+        cleaned_status = bonus.status.strip() if bonus.status else "pending"
+        with self._database.connect() as connection:
+            cursor = connection.execute(
+                """
+                INSERT INTO bonus_records (session_id, student_name, b_point, status)
+                VALUES (?, ?, ?, ?)
+                """,
+                (
+                    bonus.session_id,
+                    bonus.student_name.strip(),
+                    float(bonus.b_point),
+                    cleaned_status,
+                ),
+            )
+            return int(cursor.lastrowid)
 
     def create_session_template(
         self,

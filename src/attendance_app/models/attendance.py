@@ -4,7 +4,6 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Optional
 
-
 WEEKDAY_LABELS = {
     1: "Monday",
     2: "Tuesday",
@@ -12,7 +11,6 @@ WEEKDAY_LABELS = {
     4: "Thursday",
     5: "Friday",
 }
-
 
 @dataclass(slots=True)
 class Student:
@@ -26,7 +24,6 @@ class Student:
         parts = [self.first_name or "", self.last_name or ""]
         name = " ".join(part for part in parts if part).strip()
         return name if name else self.student_code
-
 
 @dataclass(slots=True)
 class AttendanceSession:
@@ -45,7 +42,6 @@ class AttendanceSession:
             f"{self.start_hour:02d}-{self.end_hour:02d}-{self.campus_name}-{self.room_code}"
         )
 
-
 @dataclass(slots=True)
 class AttendanceRecord:
     session_id: int
@@ -53,8 +49,17 @@ class AttendanceRecord:
     student_name: Optional[str] = None
     recorded_at: datetime = field(default_factory=datetime.utcnow)
     source: str = "manual"
-    payload: Optional[str] = None
+    a_point: float = 0.0
+    b_point: float = 0.0
+    t_point: float = 0.0
+    status: str = "recorded"
 
+@dataclass(slots=True)
+class BonusRecord:
+    session_id: int
+    student_name: str
+    b_point: float = 0.0
+    status: str = "pending"
 
 @dataclass(slots=True)
 class SessionTemplate:

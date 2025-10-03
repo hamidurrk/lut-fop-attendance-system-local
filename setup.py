@@ -25,6 +25,7 @@ setup(
         "selenium>=4.13.0",
         "python-dotenv>=1.0.0",
         "requests>=2.31.0",
+        "webdriver-manager>=4.0.0",
     ],
     extras_require={
         "dev": [

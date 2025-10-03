@@ -147,3 +147,9 @@ class CollapsibleNav(ctk.CTkFrame):
                 button.configure(text_color=VS_TEXT)
             else:
                 button.configure(text_color=VS_TEXT)
+
+    def refresh_layout(self):
+        """Refresh navigation layout without changing state"""
+        # Reapply current collapsed state
+        if hasattr(self, 'is_collapsed'):
+            self.set_collapsed(self.is_collapsed)

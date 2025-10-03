@@ -23,6 +23,7 @@ def test_initialize_creates_tables(tmp_path: Path) -> None:
         "attendance_records",
         "session_templates",
         "auto_grader_runs",
+        "bonus_records",
         "schema_migrations",
     }
 

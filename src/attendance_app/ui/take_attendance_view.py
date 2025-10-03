@@ -3,9 +3,11 @@ from __future__ import annotations
 import tkinter.messagebox as messagebox
 from tkinter import BooleanVar, IntVar, StringVar
 from typing import Callable
+import threading
 
 import customtkinter as ctk
 
+from attendance_app.automation import ChromeAutomationError, ChromeRemoteController
 from attendance_app.models import AttendanceSession, SessionTemplate, Student
 from attendance_app.services import AttendanceService, DuplicateAttendanceError, DuplicateSessionError
 from attendance_app.ui.theme import (
@@ -35,12 +37,14 @@ class TakeAttendanceView(ctk.CTkFrame):
         master,
         attendance_service: AttendanceService,
         *,
+        chrome_controller: ChromeRemoteController | None = None,
         on_session_started: Callable[[], None] | None = None,
         on_session_ended: Callable[[], None] | None = None,
     ) -> None:
         super().__init__(master, fg_color=VS_BG)
         self._service = attendance_service
         self._active_session_id: int | None = None
+        self._chrome_controller = chrome_controller
         self._on_session_started = on_session_started
         self._on_session_ended = on_session_ended
 
@@ -59,6 +63,7 @@ class TakeAttendanceView(ctk.CTkFrame):
         self.week_var = StringVar(value=self.WEEK_OPTIONS[0])
 
         self._templates: list[SessionTemplate] = []
+        self._open_chrome_button: ctk.CTkButton | None = None
 
         self._build_widgets()
         self._load_templates()
@@ -329,6 +334,7 @@ class TakeAttendanceView(ctk.CTkFrame):
         button_row.grid(row=5, column=0, columnspan=2, padx=20, pady=(0, 20), sticky="ew")
         button_row.grid_columnconfigure(0, weight=1)
         button_row.grid_columnconfigure(1, weight=0)
+        button_row.grid_columnconfigure(2, weight=0)
 
         self._manual_status_label = ctk.CTkLabel(
             button_row,
@@ -339,16 +345,28 @@ class TakeAttendanceView(ctk.CTkFrame):
         self._manual_status_label.grid(row=0, column=0, sticky="w")
         self._set_manual_status(self._manual_status_var.get())
 
+        self._open_chrome_button = ctk.CTkButton(
+            button_row,
+            text="Open Chrome",
+            command=self._handle_open_chrome,
+            width=160,
+            fg_color=VS_SURFACE_ALT if not self._chrome_controller else VS_ACCENT,
+            hover_color=VS_ACCENT_HOVER if self._chrome_controller else VS_DIVIDER,
+            text_color=VS_TEXT,
+        )
+        self._open_chrome_button.grid(row=0, column=1, padx=(12, 12), sticky="e")
+        if not self._chrome_controller:
+            self._open_chrome_button.configure(state="disabled")
+
         ctk.CTkButton(
             button_row,
             text="Record attendance",
             command=self._handle_manual_record,
             width=220,
-            font=ctk.CTkFont(size=18, weight="bold"),
             fg_color=VS_ACCENT,
             hover_color=VS_ACCENT_HOVER,
             text_color=VS_TEXT,
-        ).grid(row=0, column=1, sticky="e")
+        ).grid(row=0, column=2, sticky="e")
 
     def _build_qr_panel(self, frame: ctk.CTkFrame) -> None:
         frame.grid_rowconfigure(1, weight=1)
@@ -509,6 +527,42 @@ class TakeAttendanceView(ctk.CTkFrame):
     # ------------------------------------------------------------------
     # Manual attendance workflow
     # ------------------------------------------------------------------
+    def _handle_open_chrome(self) -> None:
+        if not self._chrome_controller:
+            self._set_manual_status("Chrome automation is not configured.", tone="warning")
+            return
+
+        if self._open_chrome_button is not None:
+            self._open_chrome_button.configure(state="disabled")
+
+        self._set_manual_status("Opening automated Chrome...", tone="info")
+
+        threading.Thread(target=self._open_chrome_async, daemon=True).start()
+
+    def _open_chrome_async(self) -> None:
+        if not self._chrome_controller:
+            return
+
+        try:
+            self._chrome_controller.open_browser()
+        except ChromeAutomationError as exc:
+            message = str(exc)
+            tone = "warning"
+        except Exception as exc:  # pragma: no cover - guard unexpected issues
+            message = f"Failed to open Chrome: {exc}"
+            tone = "warning"
+        else:
+            message = "Chrome automation ready."
+            tone = "success"
+
+        def _finalize() -> None:
+            self._set_manual_status(message, tone)
+            if self._open_chrome_button is not None:
+                state = "normal" if self._chrome_controller else "disabled"
+                self._open_chrome_button.configure(state=state)
+
+        self.after(0, _finalize)
+
     def _handle_manual_record(self) -> None:
         self._set_manual_status("")
 
