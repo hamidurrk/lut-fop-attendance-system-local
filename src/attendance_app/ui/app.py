@@ -5,7 +5,7 @@ import json
 import os
 import re
 
-from attendance_app.automation import ChromeRemoteController, ChromeAutomationError
+from attendance_app.automation import ChromeRemoteController, ChromeAutomationError, open_moodle_courses
 from attendance_app.config.settings import settings
 from attendance_app.data import Database
 from attendance_app.services import AttendanceService
@@ -55,14 +55,16 @@ class AttendanceApp:
         self._content.grid_rowconfigure(0, weight=1)
         self._content.grid_columnconfigure(0, weight=1)
 
+        take_attendance_view = TakeAttendanceView(
+            self._content,
+            self._attendance_service,
+            chrome_controller=self._chrome_controller,
+            on_session_started=self._handle_session_started,
+            on_session_ended=self._handle_session_ended,
+        )
+
         self._views = {
-            "take_attendance": TakeAttendanceView(
-                self._content,
-                self._attendance_service,
-                chrome_controller=self._chrome_controller,
-                on_session_started=self._handle_session_started,
-                on_session_ended=self._handle_session_ended,
-            ),
+            "take_attendance": take_attendance_view,
             "history": PlaceholderView(
                 self._content,
                 title="Attendance history",
@@ -74,6 +76,8 @@ class AttendanceApp:
                 message="Automate grading workflows from this tab in future iterations.",
             ),
         }
+
+        take_attendance_view.register_bonus_automation_handler(open_moodle_courses)
 
         for view in self._views.values():
             view.grid(row=0, column=0, sticky="nsew")

@@ -7,8 +7,13 @@ import threading
 
 import customtkinter as ctk
 
-from attendance_app.automation import ChromeAutomationError, ChromeRemoteController
-from attendance_app.models import AttendanceSession, SessionTemplate, Student
+from attendance_app.automation import (
+    ChromeAutomationError,
+    ChromeRemoteController,
+    get_bonus_student_data,
+)
+from attendance_app.automation.bonus_workflows import BonusAutomationResult
+from attendance_app.models import AttendanceSession, BonusRecord, SessionTemplate, Student
 from attendance_app.services import AttendanceService, DuplicateAttendanceError, DuplicateSessionError
 from attendance_app.ui.theme import (
     VS_ACCENT,
@@ -25,6 +30,7 @@ from attendance_app.ui.theme import (
     VS_WARNING,
 )
 from attendance_app.utils import InvalidHourRange, WEEKDAY_OPTIONS, format_relative_time, parse_hour_range
+from attendance_app.config.settings import settings
 
 CAMPUS_OPTIONS: tuple[str, ...] = ("Lappeenranta", "Lahti")
 
@@ -52,10 +58,15 @@ class TakeAttendanceView(ctk.CTkFrame):
         self._session_info_var = StringVar(value="")
         self._qr_status_var = StringVar(value="Scanner idle")
         self._manual_status_var = StringVar(value="")
+        self._bonus_status_var = StringVar(value="")
+        self._bonus_info_var = StringVar(value="")
+        self._bonus_output_var = StringVar(value="Automation output will appear here after launch.")
 
         self.student_name_var = StringVar()
         self.student_id_var = StringVar()
         self._hide_student_id_var = BooleanVar(value=False)
+        self.bonus_student_name_var = StringVar()
+        self.bonus_point_var = StringVar()
 
         self.selected_template_label = StringVar(value="No session templates")
         self.selected_template_id = IntVar(value=0)
@@ -63,11 +74,37 @@ class TakeAttendanceView(ctk.CTkFrame):
         self.week_var = StringVar(value=self.WEEK_OPTIONS[0])
 
         self._templates: list[SessionTemplate] = []
-        self._open_chrome_button: ctk.CTkButton | None = None
+        self._chrome_buttons: list[ctk.CTkButton] = []
+        self._bonus_recent_list: ctk.CTkScrollableFrame | None = None
+        self._bonus_status_label: ctk.CTkLabel | None = None
+        self._bonus_automation_handlers: list[
+            Callable[[ChromeRemoteController], BonusAutomationResult]
+        ] = []
+        self._bonus_get_student_button: ctk.CTkButton | None = None
 
         self._build_widgets()
         self._load_templates()
         self.refresh_recent_sessions()
+
+    # ------------------------------------------------------------------
+    # Automation hooks
+    # ------------------------------------------------------------------
+    def register_bonus_automation_handler(
+        self,
+        handler: Callable[[ChromeRemoteController], BonusAutomationResult],
+    ) -> None:
+        if handler in self._bonus_automation_handlers:
+            return
+
+        self._bonus_automation_handlers.append(handler)
+
+        default_message = "Automation output will appear here after launch."
+
+        if self._bonus_output_var.get() == default_message:
+            handler_names = ", ".join(self._resolve_handler_name(h) for h in self._bonus_automation_handlers)
+            self._bonus_output_var.set(
+                f"Registered bonus automation workflows: {handler_names}" if handler_names else default_message
+            )
 
     # ------------------------------------------------------------------
     # Status helpers
@@ -91,6 +128,16 @@ class TakeAttendanceView(ctk.CTkFrame):
         }
         if hasattr(self, "_manual_status_label"):
             self._manual_status_label.configure(text_color=color_map.get(tone, VS_TEXT_MUTED))
+
+    def _set_bonus_status(self, message: str, tone: str = "info") -> None:
+        self._bonus_status_var.set(message)
+        color_map = {
+            "info": VS_TEXT_MUTED,
+            "success": VS_SUCCESS,
+            "warning": VS_WARNING,
+        }
+        if self._bonus_status_label is not None:
+            self._bonus_status_label.configure(text_color=color_map.get(tone, VS_TEXT_MUTED))
 
     # ------------------------------------------------------------------
     # Layout construction
@@ -144,23 +191,28 @@ class TakeAttendanceView(ctk.CTkFrame):
         self._end_session_button.grid(row=0, column=1, sticky="e")
         self._end_session_button.configure(state="disabled")
 
-        self._left_stack = ctk.CTkFrame(self._attendance_container, fg_color=VS_SURFACE)
-        self._left_stack.grid(row=1, column=0, sticky="nsew", padx=(0, 12))
-        self._left_stack.grid_columnconfigure(0, weight=1)
-        self._left_stack.grid_rowconfigure(0, weight=1)
-        self._left_stack.grid_rowconfigure(1, weight=2)
+        self._tab_view = ctk.CTkTabview(
+            self._attendance_container,
+            fg_color=VS_SURFACE,
+            segmented_button_fg_color=VS_SURFACE_ALT,
+        )
+        self._tab_view.grid(row=1, column=0, columnspan=2, sticky="nsew")
+        self._tab_view.add("Record attendance")
+        self._tab_view.add("Record bonus")
 
-        self._manual_frame = ctk.CTkFrame(self._left_stack, corner_radius=12, fg_color=VS_SURFACE_ALT)
-        self._manual_frame.grid(row=0, column=0, sticky="nsew", pady=(0, 12))
-        self._build_manual_panel(self._manual_frame)
+        attendance_tab = self._tab_view.tab("Record attendance")
+        bonus_tab = self._tab_view.tab("Record bonus")
 
-        self._recent_frame = ctk.CTkFrame(self._left_stack, corner_radius=12, fg_color=VS_SURFACE_ALT)
-        self._recent_frame.grid(row=1, column=0, sticky="nsew", pady=(12, 0))
-        self._build_recent_panel(self._recent_frame)
+        attendance_tab.grid_rowconfigure(0, weight=1)
+        attendance_tab.grid_columnconfigure(0, weight=3, uniform="activity")
+        attendance_tab.grid_columnconfigure(1, weight=2, uniform="activity")
 
-        self._qr_frame = ctk.CTkFrame(self._attendance_container, corner_radius=12, fg_color=VS_SURFACE_ALT)
-        self._qr_frame.grid(row=1, column=1, sticky="nsew", padx=(12, 0))
-        self._build_qr_panel(self._qr_frame)
+        bonus_tab.grid_rowconfigure(0, weight=1)
+        bonus_tab.grid_columnconfigure(0, weight=3, uniform="activity")
+        bonus_tab.grid_columnconfigure(1, weight=2, uniform="activity")
+
+        self._build_attendance_tab(attendance_tab)
+        self._build_bonus_tab(bonus_tab)
 
     def _build_session_form(self, frame: ctk.CTkFrame) -> None:
         frame.grid_columnconfigure(0, weight=1)
@@ -252,6 +304,44 @@ class TakeAttendanceView(ctk.CTkFrame):
             text_color=VS_TEXT,
         )
         start_btn.grid(row=6, column=0, columnspan=2, padx=24, pady=(4, 24), sticky="ew")
+
+    def _build_attendance_tab(self, tab: ctk.CTkFrame) -> None:
+        self._left_stack = ctk.CTkFrame(tab, fg_color=VS_SURFACE)
+        self._left_stack.grid(row=0, column=0, sticky="nsew", padx=(0, 12))
+        self._left_stack.grid_columnconfigure(0, weight=1)
+        self._left_stack.grid_rowconfigure(0, weight=1)
+        self._left_stack.grid_rowconfigure(1, weight=2)
+
+        self._manual_frame = ctk.CTkFrame(self._left_stack, corner_radius=12, fg_color=VS_SURFACE_ALT)
+        self._manual_frame.grid(row=0, column=0, sticky="nsew", pady=(0, 12))
+        self._build_manual_panel(self._manual_frame)
+
+        self._recent_frame = ctk.CTkFrame(self._left_stack, corner_radius=12, fg_color=VS_SURFACE_ALT)
+        self._recent_frame.grid(row=1, column=0, sticky="nsew", pady=(12, 0))
+        self._build_recent_panel(self._recent_frame)
+
+        self._qr_frame = ctk.CTkFrame(tab, corner_radius=12, fg_color=VS_SURFACE_ALT)
+        self._qr_frame.grid(row=0, column=1, sticky="nsew", padx=(12, 0))
+        self._build_qr_panel(self._qr_frame)
+
+    def _build_bonus_tab(self, tab: ctk.CTkFrame) -> None:
+        self._bonus_left_stack = ctk.CTkFrame(tab, fg_color=VS_SURFACE)
+        self._bonus_left_stack.grid(row=0, column=0, sticky="nsew", padx=(0, 12))
+        self._bonus_left_stack.grid_columnconfigure(0, weight=1)
+        self._bonus_left_stack.grid_rowconfigure(0, weight=1)
+        self._bonus_left_stack.grid_rowconfigure(1, weight=2)
+
+        self._bonus_manual_frame = ctk.CTkFrame(self._bonus_left_stack, corner_radius=12, fg_color=VS_SURFACE_ALT)
+        self._bonus_manual_frame.grid(row=0, column=0, sticky="nsew", pady=(0, 12))
+        self._build_bonus_manual_panel(self._bonus_manual_frame)
+
+        self._bonus_recent_frame = ctk.CTkFrame(self._bonus_left_stack, corner_radius=12, fg_color=VS_SURFACE_ALT)
+        self._bonus_recent_frame.grid(row=1, column=0, sticky="nsew", pady=(12, 0))
+        self._build_bonus_recent_panel(self._bonus_recent_frame)
+
+        self._bonus_action_frame = ctk.CTkFrame(tab, corner_radius=12, fg_color=VS_SURFACE_ALT)
+        self._bonus_action_frame.grid(row=0, column=1, sticky="nsew", padx=(12, 0))
+        self._build_bonus_action_panel(self._bonus_action_frame)
 
     def _build_recent_panel(self, frame: ctk.CTkFrame) -> None:
         frame.grid_columnconfigure(0, weight=1)
@@ -345,18 +435,20 @@ class TakeAttendanceView(ctk.CTkFrame):
         self._manual_status_label.grid(row=0, column=0, sticky="w")
         self._set_manual_status(self._manual_status_var.get())
 
-        self._open_chrome_button = ctk.CTkButton(
+        open_chrome_button = ctk.CTkButton(
             button_row,
             text="Open Chrome",
-            command=self._handle_open_chrome,
+            command=lambda: self._handle_open_chrome(source="attendance"),
             width=160,
             fg_color=VS_SURFACE_ALT if not self._chrome_controller else VS_ACCENT,
             hover_color=VS_ACCENT_HOVER if self._chrome_controller else VS_DIVIDER,
             text_color=VS_TEXT,
         )
-        self._open_chrome_button.grid(row=0, column=1, padx=(12, 12), sticky="e")
+        open_chrome_button.grid(row=0, column=1, padx=(12, 12), sticky="e")
         if not self._chrome_controller:
-            self._open_chrome_button.configure(state="disabled")
+            open_chrome_button.configure(state="disabled")
+        if open_chrome_button not in self._chrome_buttons:
+            self._chrome_buttons.append(open_chrome_button)
 
         ctk.CTkButton(
             button_row,
@@ -390,6 +482,209 @@ class TakeAttendanceView(ctk.CTkFrame):
         ctk.CTkLabel(frame, textvariable=self._qr_status_var, text_color=VS_TEXT_MUTED, font=body_font).grid(
             row=2, column=0, padx=20, pady=(4, 20), sticky="w"
         )
+
+    def _build_bonus_manual_panel(self, frame: ctk.CTkFrame) -> None:
+        frame.grid_columnconfigure(0, weight=1)
+        frame.grid_columnconfigure(1, weight=1)
+
+        header_font = ctk.CTkFont(size=20, weight="bold")
+        label_font = ctk.CTkFont(size=18)
+        status_font = ctk.CTkFont(size=15)
+
+        header_row = ctk.CTkFrame(frame, fg_color=VS_SURFACE_ALT)
+        header_row.grid(row=0, column=0, columnspan=2, padx=20, pady=(20, 12), sticky="ew")
+        header_row.grid_columnconfigure(0, weight=1)
+
+        ctk.CTkLabel(header_row, text="Manual bonus entry", font=header_font, text_color=VS_TEXT).grid(
+            row=0, column=0, sticky="w"
+        )
+
+        info = ctk.CTkLabel(frame, textvariable=self._bonus_info_var, text_color=VS_TEXT_MUTED, font=status_font)
+        info.grid(row=1, column=0, columnspan=2, padx=20, pady=(0, 12), sticky="w")
+
+        ctk.CTkLabel(frame, text="Student name", font=label_font, text_color=VS_TEXT).grid(
+            row=2, column=0, padx=20, pady=6, sticky="w"
+        )
+        ctk.CTkEntry(
+            frame,
+            textvariable=self.bonus_student_name_var,
+            font=label_font,
+            fg_color=VS_BG,
+            border_color=VS_BORDER,
+            text_color=VS_TEXT,
+            placeholder_text_color=VS_TEXT_MUTED,
+        ).grid(row=2, column=1, padx=20, pady=6, sticky="ew")
+
+        ctk.CTkLabel(frame, text="Bonus point", font=label_font, text_color=VS_TEXT).grid(
+            row=3, column=0, padx=20, pady=6, sticky="w"
+        )
+        ctk.CTkEntry(
+            frame,
+            textvariable=self.bonus_point_var,
+            font=label_font,
+            fg_color=VS_BG,
+            border_color=VS_BORDER,
+            text_color=VS_TEXT,
+            placeholder_text_color=VS_TEXT_MUTED,
+        ).grid(row=3, column=1, padx=20, pady=6, sticky="ew")
+
+        frame.grid_rowconfigure(4, weight=1)
+
+        button_row = ctk.CTkFrame(frame, fg_color=VS_SURFACE_ALT)
+        button_row.grid(row=5, column=0, columnspan=2, padx=20, pady=(0, 20), sticky="ew")
+        button_row.grid_columnconfigure(0, weight=1)
+        button_row.grid_columnconfigure(1, weight=0)
+
+        self._bonus_status_label = ctk.CTkLabel(
+            button_row,
+            textvariable=self._bonus_status_var,
+            text_color=VS_TEXT_MUTED,
+            font=status_font,
+        )
+        self._bonus_status_label.grid(row=0, column=0, sticky="w")
+        self._set_bonus_status(self._bonus_status_var.get())
+
+        ctk.CTkButton(
+            button_row,
+            text="Record bonus",
+            command=self._handle_bonus_record,
+            width=220,
+            fg_color=VS_ACCENT,
+            hover_color=VS_ACCENT_HOVER,
+            text_color=VS_TEXT,
+        ).grid(row=0, column=1, sticky="e")
+
+    def _build_bonus_recent_panel(self, frame: ctk.CTkFrame) -> None:
+        frame.grid_columnconfigure(0, weight=1)
+        frame.grid_rowconfigure(1, weight=1)
+
+        header_font = ctk.CTkFont(size=20, weight="bold")
+        body_font = ctk.CTkFont(size=16)
+
+        ctk.CTkLabel(frame, text="Bonuses in this session", font=header_font, text_color=VS_TEXT).grid(
+            row=0, column=0, padx=20, pady=(20, 8), sticky="w"
+        )
+
+        self._bonus_recent_list = ctk.CTkScrollableFrame(frame, label_text="", fg_color=VS_SURFACE_ALT)
+        self._bonus_recent_list.grid(row=1, column=0, padx=20, pady=(0, 20), sticky="nsew")
+
+        empty_label = ctk.CTkLabel(
+            self._bonus_recent_list,
+            text="No bonus points awarded yet.",
+            text_color=VS_TEXT_MUTED,
+            font=body_font,
+        )
+        empty_label.pack(anchor="w", padx=12, pady=6)
+
+    def _build_bonus_action_panel(self, frame: ctk.CTkFrame) -> None:
+        frame.grid_rowconfigure(1, weight=1)
+        frame.grid_rowconfigure(4, weight=1)
+        header_font = ctk.CTkFont(size=20, weight="bold")
+        body_font = ctk.CTkFont(size=15)
+
+        ctk.CTkLabel(frame, text="Automation", font=header_font, text_color=VS_TEXT).grid(
+            row=0, column=0, padx=20, pady=(20, 8), sticky="w"
+        )
+
+        ctk.CTkLabel(
+            frame,
+            text="Launch the automated Chrome session to capture bonus evidence.",
+            justify="left",
+            font=body_font,
+            text_color=VS_TEXT_MUTED,
+        ).grid(row=1, column=0, padx=20, pady=16, sticky="nsew")
+
+        button = ctk.CTkButton(
+            frame,
+            text="Open Chrome",
+            command=lambda: self._handle_open_chrome(source="bonus"),
+            width=200,
+            fg_color=VS_SURFACE_ALT if not self._chrome_controller else VS_ACCENT,
+            hover_color=VS_ACCENT_HOVER if self._chrome_controller else VS_DIVIDER,
+            text_color=VS_TEXT,
+        )
+        button.grid(row=2, column=0, padx=20, pady=(0, 20), sticky="w")
+        if not self._chrome_controller:
+            button.configure(state="disabled")
+        if button not in self._chrome_buttons:
+            self._chrome_buttons.append(button)
+
+        get_student_button = ctk.CTkButton(
+            frame,
+            text="Get student data",
+            command=self._handle_bonus_get_student_data,
+            width=200,
+            fg_color=VS_SURFACE_ALT if not self._chrome_controller else VS_ACCENT,
+            hover_color=VS_ACCENT_HOVER if self._chrome_controller else VS_DIVIDER,
+            text_color=VS_TEXT,
+        )
+        get_student_button.grid(row=3, column=0, padx=20, pady=(0, 16), sticky="w")
+        if not self._chrome_controller:
+            get_student_button.configure(state="disabled")
+        self._bonus_get_student_button = get_student_button
+
+        self._bonus_output_label = ctk.CTkLabel(
+            frame,
+            textvariable=self._bonus_output_var,
+            text_color=VS_TEXT_MUTED,
+            justify="left",
+            wraplength=320,
+        )
+        self._bonus_output_label.grid(row=4, column=0, padx=20, pady=(0, 20), sticky="nsew")
+
+    def refresh_recent_sessions(self) -> None:
+        self._refresh_recent_attendance()
+        self._refresh_bonus_list()
+
+    def _refresh_bonus_list(self) -> None:
+        if self._bonus_recent_list is None:
+            return
+
+        for widget in self._bonus_recent_list.winfo_children():
+            widget.destroy()
+
+        if not self._active_session_id:
+            ctk.CTkLabel(
+                self._bonus_recent_list,
+                text="Start a session to record bonus points.",
+                text_color=VS_TEXT_MUTED,
+            ).pack(anchor="w", padx=12, pady=6)
+            return
+
+        records = self._service.list_bonus_for_session(self._active_session_id, limit=8)
+        if not records:
+            ctk.CTkLabel(
+                self._bonus_recent_list,
+                text="No bonus points awarded yet.",
+                text_color=VS_TEXT_MUTED,
+            ).pack(anchor="w", padx=12, pady=6)
+            return
+
+        name_font = ctk.CTkFont(size=18, weight="bold")
+        point_font = ctk.CTkFont(size=16)
+
+        for record in records:
+            card = ctk.CTkFrame(self._bonus_recent_list, corner_radius=10, fg_color=VS_CARD)
+            card.pack(fill="x", padx=12, pady=6)
+            card.grid_columnconfigure(0, weight=1)
+            card.grid_columnconfigure(1, weight=0)
+
+            name_label = ctk.CTkLabel(
+                card,
+                text=record.get("student_name", ""),
+                font=name_font,
+                text_color=VS_TEXT,
+                justify="left",
+            )
+            name_label.grid(row=0, column=0, sticky="w", padx=12, pady=10)
+
+            point_label = ctk.CTkLabel(
+                card,
+                text=f"{record.get('b_point', 0):.1f} pts",
+                font=point_font,
+                text_color=VS_ACCENT,
+            )
+            point_label.grid(row=0, column=1, sticky="e", padx=(4, 12), pady=10)
 
     # ------------------------------------------------------------------
     # Session template management
@@ -471,17 +766,20 @@ class TakeAttendanceView(ctk.CTkFrame):
             return
 
         self._activate_session(session, session_id)
-        self.refresh_recent_sessions()
         if self._on_session_started:
             self._on_session_started()
 
     def _handle_end_session(self) -> None:
         self._active_session_id = None
         self._session_info_var.set("")
+        self._bonus_info_var.set("")
         self.student_name_var.set("")
         self.student_id_var.set("")
+        self.bonus_student_name_var.set("")
+        self.bonus_point_var.set("")
         self._qr_status_var.set("Scanner idle")
         self._set_manual_status("")
+        self._set_bonus_status("")
         if hasattr(self, "_active_header"):
             self._active_header.configure(text=self._default_header_text)
         if hasattr(self, "_end_session_button"):
@@ -489,6 +787,7 @@ class TakeAttendanceView(ctk.CTkFrame):
         self._show_session_form()
         if self._on_session_ended:
             self._on_session_ended()
+        self.refresh_recent_sessions()
 
     def _activate_session(self, session: AttendanceSession, session_id: int) -> None:
         self._active_session_id = session_id
@@ -500,6 +799,13 @@ class TakeAttendanceView(ctk.CTkFrame):
             )
         )
         self._update_status_message(f"Session {session_id} started. Ready for attendance.", tone="success")
+        self._bonus_info_var.set(
+            (
+                f"Session {session_id} · {session.chapter_code} Week {session.week_number}\n"
+                f"{session.campus_name} · {session.room_code}"
+            )
+        )
+        self._set_bonus_status("Ready to record bonus points.")
         if hasattr(self, "_active_header"):
             self._active_header.configure(
                 text=(
@@ -510,6 +816,7 @@ class TakeAttendanceView(ctk.CTkFrame):
         if hasattr(self, "_end_session_button"):
             self._end_session_button.configure(state="normal")
         self._show_attendance_ui()
+        self.refresh_recent_sessions()
 
     def _show_session_form(self) -> None:
         self._attendance_container.grid_remove()
@@ -527,19 +834,23 @@ class TakeAttendanceView(ctk.CTkFrame):
     # ------------------------------------------------------------------
     # Manual attendance workflow
     # ------------------------------------------------------------------
-    def _handle_open_chrome(self) -> None:
+    def _handle_open_chrome(self, *, source: str = "attendance") -> None:
+        status_setter = self._set_bonus_status if source == "bonus" else self._set_manual_status
+
         if not self._chrome_controller:
-            self._set_manual_status("Chrome automation is not configured.", tone="warning")
+            status_setter("Chrome automation is not configured.", tone="warning")
             return
 
-        if self._open_chrome_button is not None:
-            self._open_chrome_button.configure(state="disabled")
+        for button in self._chrome_buttons:
+            button.configure(state="disabled")
 
-        self._set_manual_status("Opening automated Chrome...", tone="info")
+        status_setter("Opening automated Chrome...", tone="info")
+        if source == "bonus":
+            self._bonus_output_var.set("Waiting for Chrome to be ready...")
 
-        threading.Thread(target=self._open_chrome_async, daemon=True).start()
+        threading.Thread(target=self._open_chrome_async, args=(source,), daemon=True).start()
 
-    def _open_chrome_async(self) -> None:
+    def _open_chrome_async(self, source: str) -> None:
         if not self._chrome_controller:
             return
 
@@ -556,12 +867,158 @@ class TakeAttendanceView(ctk.CTkFrame):
             tone = "success"
 
         def _finalize() -> None:
-            self._set_manual_status(message, tone)
-            if self._open_chrome_button is not None:
-                state = "normal" if self._chrome_controller else "disabled"
-                self._open_chrome_button.configure(state=state)
+            status_setter = self._set_bonus_status if source == "bonus" else self._set_manual_status
+            status_setter(message, tone)
+            state = "normal" if self._chrome_controller else "disabled"
+            for button in self._chrome_buttons:
+                button.configure(state=state)
+
+            if source == "bonus":
+                if tone == "success" and self._bonus_automation_handlers:
+                    threading.Thread(target=self._execute_bonus_handlers, daemon=True).start()
+                elif tone != "success":
+                    self._bonus_output_var.set("Automation aborted due to Chrome launch failure.")
 
         self.after(0, _finalize)
+
+    def _handle_bonus_get_student_data(self) -> None:
+        if not self._chrome_controller:
+            self._set_bonus_status("Chrome automation is not configured.", tone="warning")
+            return
+
+        if self._bonus_get_student_button is not None:
+            self._bonus_get_student_button.configure(state="disabled")
+
+        self._set_bonus_status("Fetching student data...", tone="info")
+        self._bonus_output_var.set("Fetching student data...")
+
+        threading.Thread(target=self._fetch_bonus_student_data_async, daemon=True).start()
+
+    def _fetch_bonus_student_data_async(self) -> None:
+        controller = self._chrome_controller
+        if controller is None:
+            return
+
+        student_name: str | None = None
+        error_message: str | None = None
+
+        try:
+            controller.open_browser()
+            result = get_bonus_student_data(controller)
+            
+            # Extract student name from the result payload
+            if isinstance(result, BonusAutomationResult) and result.success and result.payload:
+                student_name = result.payload.get("student_name")
+            else:
+                error_message = result.summary if isinstance(result, BonusAutomationResult) else "Unknown error"
+        except Exception as exc:  # pragma: no cover - guard automation issues
+            error_message = str(exc)
+
+        def _finalize() -> None:
+            button = self._bonus_get_student_button
+            if button is not None:
+                state = "normal" if self._chrome_controller else "disabled"
+                button.configure(state=state)
+
+            if error_message:
+                self._set_bonus_status("Failed to fetch student data.", tone="warning")
+                self._bonus_output_var.set(f"Failed to fetch student data: {error_message}")
+                return
+
+            if student_name:
+                normalized = student_name.strip()
+                self.bonus_student_name_var.set(normalized)
+                self.bonus_point_var.set(settings.default_bonus_points)
+                self._bonus_output_var.set(f"Student data received: {normalized}")
+                self._set_bonus_status("Student data captured.", tone="success")
+            else:
+                self._set_bonus_status("No student data returned.", tone="warning")
+                self._bonus_output_var.set("No student data returned from automation.")
+
+        self.after(0, _finalize)
+
+    def _execute_bonus_handlers(self) -> None:
+        handlers = list(self._bonus_automation_handlers)
+        controller = self._chrome_controller
+
+        if not handlers:
+            def _no_handlers() -> None:
+                self._bonus_output_var.set("No bonus automation workflows registered.")
+                self._set_bonus_status("No automation workflows to run.")
+
+            self.after(0, _no_handlers)
+            return
+
+        if controller is None:
+            def _missing_controller() -> None:
+                self._bonus_output_var.set("Chrome controller is unavailable.")
+                self._set_bonus_status("Chrome automation is not configured.", tone="warning")
+
+            self.after(0, _missing_controller)
+            return
+
+        def _announce_start() -> None:
+            self._set_bonus_status("Running bonus automation workflows...", tone="info")
+            self._bonus_output_var.set("Running bonus automation workflows...")
+
+        self.after(0, _announce_start)
+
+        results: list[BonusAutomationResult] = []
+
+        for handler in handlers:
+            handler_name = self._resolve_handler_name(handler)
+            try:
+                result = handler(controller)
+            except Exception as exc:  # pragma: no cover - guard automation issues
+                result = BonusAutomationResult(
+                    handler_name=handler_name,
+                    success=False,
+                    summary="Workflow raised an exception.",
+                    details=str(exc),
+                )
+            else:
+                if not isinstance(result, BonusAutomationResult):
+                    result = BonusAutomationResult(
+                        handler_name=handler_name,
+                        success=False,
+                        summary="Workflow returned an unsupported result type.",
+                        details=f"Expected BonusAutomationResult, got {type(result).__name__} instead.",
+                    )
+            results.append(result)
+
+        def _render_results() -> None:
+            if not results:
+                self._bonus_output_var.set("No bonus automation workflows produced output.")
+                self._set_bonus_status("No automation output received.")
+                return
+
+            success_count = sum(1 for res in results if res.success)
+            failure_count = sum(1 for res in results if not res.success)
+
+            formatted: list[str] = []
+            for res in results:
+                indicator = "✅" if res.success else "⚠️"
+                formatted.append(f"{indicator} {res.handler_name}: {res.summary}")
+                if res.details:
+                    for line in res.details.splitlines():
+                        line = line.strip()
+                        if line:
+                            formatted.append(f"    • {line}")
+
+            self._bonus_output_var.set("\n".join(formatted))
+
+            if failure_count:
+                self._set_bonus_status(
+                    f"Bonus automation finished with {failure_count} issue(s).",
+                    tone="warning",
+                )
+            else:
+                self._set_bonus_status(
+                    f"Bonus automation completed successfully ({success_count} workflow(s)).",
+                    tone="success",
+                )
+
+        self.after(0, _render_results)
 
     def _handle_manual_record(self) -> None:
         self._set_manual_status("")
@@ -604,10 +1061,48 @@ class TakeAttendanceView(ctk.CTkFrame):
         self.refresh_recent_sessions()
         self._set_manual_status(f"Recorded {student_code}.", tone="success")
 
+    def _handle_bonus_record(self) -> None:
+        self._set_bonus_status("")
+
+        if not self._active_session_id:
+            self._set_bonus_status("Start a session before recording bonus points.", tone="warning")
+            return
+
+        student_name = self.bonus_student_name_var.get().strip()
+        bonus_value_raw = self.bonus_point_var.get().strip()
+
+        if not student_name:
+            self._set_bonus_status("Student name is required.", tone="warning")
+            return
+
+        try:
+            bonus_value = float(bonus_value_raw)
+        except ValueError:
+            self._set_bonus_status("Enter a valid number of bonus points.", tone="warning")
+            return
+
+        bonus_record = BonusRecord(
+            session_id=self._active_session_id,
+            student_name=student_name,
+            b_point=bonus_value,
+            status="recorded",
+        )
+
+        try:
+            self._service.record_bonus(bonus_record)
+        except Exception as exc:  # pragma: no cover - guard unexpected issues
+            self._set_bonus_status(f"Failed to record bonus: {exc}", tone="warning")
+            return
+
+        self.bonus_student_name_var.set("")
+        self.bonus_point_var.set("")
+        self._set_bonus_status(f"Recorded bonus for {student_name}.", tone="success")
+        self.refresh_recent_sessions()
+
     # ------------------------------------------------------------------
     # Recent session list helpers
     # ------------------------------------------------------------------
-    def refresh_recent_sessions(self) -> None:
+    def _refresh_recent_attendance(self) -> None:
         if not hasattr(self, "_recent_list"):
             return
 
@@ -696,6 +1191,15 @@ class TakeAttendanceView(ctk.CTkFrame):
                     id_lbl.configure(wraplength=wrap_length)
 
             card.bind("<Configure>", _update_layout)
+
+    def _resolve_handler_name(
+        self,
+        handler: Callable[[ChromeRemoteController], BonusAutomationResult],
+    ) -> str:
+        name = getattr(handler, "__qualname__", None) or getattr(handler, "__name__", None)
+        if name:
+            return name
+        return handler.__class__.__name__
 
 
 class TemplateDialog(ctk.CTkToplevel):

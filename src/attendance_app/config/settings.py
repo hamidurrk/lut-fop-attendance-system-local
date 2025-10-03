@@ -27,6 +27,7 @@ class Settings:
     chrome_binary_path: Path | None = (
         Path(binary_path) if (binary_path := os.getenv("CHROME_BINARY_PATH")) else None
     )
-
+    default_bonus_points: str = "2" 
+    default_attendance_points : str = "5"
 
 settings = Settings()

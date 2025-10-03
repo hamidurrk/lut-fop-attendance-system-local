@@ -199,6 +199,21 @@ class AttendanceService:
             )
             return int(cursor.lastrowid)
 
+    def list_bonus_for_session(self, session_id: int, limit: int = 20) -> list[dict]:
+        with self._database.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT id, student_name, b_point, status
+                  FROM bonus_records
+                 WHERE session_id = ?
+              ORDER BY id DESC
+                 LIMIT ?
+                """,
+                (session_id, limit),
+            ).fetchall()
+
+        return [dict(row) for row in rows]
+
     def create_session_template(
         self,
         campus_name: str,
