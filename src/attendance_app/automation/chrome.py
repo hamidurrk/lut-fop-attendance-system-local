@@ -54,6 +54,11 @@ class ChromeRemoteController:
             self._ensure_remote_browser()
             return self._ensure_driver()
 
+    def is_browser_open(self) -> bool:
+        """Return True if the remote debugging Chrome instance appears to be running."""
+        with self._lock:
+            return self._is_port_open()
+
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------

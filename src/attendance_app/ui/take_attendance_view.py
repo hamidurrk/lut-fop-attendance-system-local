@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import tkinter.messagebox as messagebox
 from tkinter import BooleanVar, IntVar, StringVar
-from typing import Callable
+from typing import Callable, Mapping
 import threading
+from pathlib import Path
 
 import customtkinter as ctk
+from PIL import Image
 
 from attendance_app.automation import (
     ChromeAutomationError,
@@ -60,7 +62,37 @@ class TakeAttendanceView(ctk.CTkFrame):
         self._manual_status_var = StringVar(value="")
         self._bonus_status_var = StringVar(value="")
         self._bonus_info_var = StringVar(value="")
-        self._bonus_output_var = StringVar(value="Automation output will appear here after launch.")
+        self._bonus_output_var = StringVar(value="System messages will appear here.")
+        self._bonus_default_output_message = self._bonus_output_var.get()
+        self._bonus_student_details_var = StringVar(value="")
+        self._bonus_instruction_launch = (
+            "Launch the automated Chrome session to capture bonus records from CodeGrade."
+        )
+        self._bonus_instruction_ready = "Open student submission on CodeGrade to record bonus points."
+        self._bonus_instruction_var = StringVar(value=self._bonus_instruction_launch)
+        self._bonus_student_name_display = StringVar(value="")
+        self._bonus_student_task_display = StringVar(value="")
+        self._bonus_student_time_display = StringVar(value="")
+        self._bonus_student_grade_display = StringVar(value="")
+        self._bonus_student_file_display = StringVar(value="")
+
+        self._chrome_icon_image: Image.Image | None = None
+        self._chrome_icon: ctk.CTkImage | None = None
+        self._chrome_inactive_message = "Chrome automation is not running. Launch Chrome to continue."
+        self._chrome_ready_message = "Chrome automation ready."
+        self._bonus_fetch_in_progress = False
+
+        self._bonus_student_card: ctk.CTkFrame | None = None
+        self._bonus_student_name_label: ctk.CTkLabel | None = None
+        self._bonus_student_task_label: ctk.CTkLabel | None = None
+        self._bonus_student_time_label: ctk.CTkLabel | None = None
+        self._bonus_student_grade_label: ctk.CTkLabel | None = None
+        self._bonus_student_file_chip: ctk.CTkLabel | None = None
+        self._bonus_open_chrome_button: ctk.CTkButton | None = None
+        self._chrome_state_poll_job: str | None = None
+        self._chrome_state_probe_inflight = False
+
+        self._chrome_icon_image, self._chrome_icon = self._load_icon_image("chrome.png", (18, 18))
 
         self.student_name_var = StringVar()
         self.student_id_var = StringVar()
@@ -85,6 +117,8 @@ class TakeAttendanceView(ctk.CTkFrame):
         self._build_widgets()
         self._load_templates()
         self.refresh_recent_sessions()
+        self._update_chrome_ui_state()
+        self._schedule_chrome_state_poll()
 
     # ------------------------------------------------------------------
     # Automation hooks
@@ -98,7 +132,7 @@ class TakeAttendanceView(ctk.CTkFrame):
 
         self._bonus_automation_handlers.append(handler)
 
-        default_message = "Automation output will appear here after launch."
+        default_message = "System messages will appear here."
 
         if self._bonus_output_var.get() == default_message:
             handler_names = ", ".join(self._resolve_handler_name(h) for h in self._bonus_automation_handlers)
@@ -435,21 +469,6 @@ class TakeAttendanceView(ctk.CTkFrame):
         self._manual_status_label.grid(row=0, column=0, sticky="w")
         self._set_manual_status(self._manual_status_var.get())
 
-        open_chrome_button = ctk.CTkButton(
-            button_row,
-            text="Open Chrome",
-            command=lambda: self._handle_open_chrome(source="attendance"),
-            width=160,
-            fg_color=VS_SURFACE_ALT if not self._chrome_controller else VS_ACCENT,
-            hover_color=VS_ACCENT_HOVER if self._chrome_controller else VS_DIVIDER,
-            text_color=VS_TEXT,
-        )
-        open_chrome_button.grid(row=0, column=1, padx=(12, 12), sticky="e")
-        if not self._chrome_controller:
-            open_chrome_button.configure(state="disabled")
-        if open_chrome_button not in self._chrome_buttons:
-            self._chrome_buttons.append(open_chrome_button)
-
         ctk.CTkButton(
             button_row,
             text="Record attendance",
@@ -577,37 +596,48 @@ class TakeAttendanceView(ctk.CTkFrame):
         empty_label.pack(anchor="w", padx=12, pady=6)
 
     def _build_bonus_action_panel(self, frame: ctk.CTkFrame) -> None:
-        frame.grid_rowconfigure(1, weight=1)
+        frame.grid_columnconfigure(0, weight=1)
+        frame.grid_columnconfigure(1, weight=0)
         frame.grid_rowconfigure(4, weight=1)
+
         header_font = ctk.CTkFont(size=20, weight="bold")
         body_font = ctk.CTkFont(size=15)
+        header_row = ctk.CTkFrame(frame, fg_color=VS_SURFACE_ALT)
+        header_row.grid(row=0, column=0, columnspan=2, padx=20, pady=(20, 8), sticky="ew")
+        header_row.grid_columnconfigure(0, weight=1)
+        header_row.grid_columnconfigure(1, weight=0)
 
-        ctk.CTkLabel(frame, text="Automation", font=header_font, text_color=VS_TEXT).grid(
-            row=0, column=0, padx=20, pady=(20, 8), sticky="w"
+        ctk.CTkLabel(header_row, text="Automation", font=header_font, text_color=VS_TEXT).grid(
+            row=0, column=0, sticky="w"
         )
 
-        ctk.CTkLabel(
-            frame,
-            text="Launch the automated Chrome session to capture bonus evidence.",
-            justify="left",
-            font=body_font,
-            text_color=VS_TEXT_MUTED,
-        ).grid(row=1, column=0, padx=20, pady=16, sticky="nsew")
-
-        button = ctk.CTkButton(
-            frame,
+        open_chrome_button = ctk.CTkButton(
+            header_row,
             text="Open Chrome",
             command=lambda: self._handle_open_chrome(source="bonus"),
-            width=200,
+            width=140,
             fg_color=VS_SURFACE_ALT if not self._chrome_controller else VS_ACCENT,
             hover_color=VS_ACCENT_HOVER if self._chrome_controller else VS_DIVIDER,
             text_color=VS_TEXT,
+            image=self._chrome_icon,
+            compound="left",
         )
-        button.grid(row=2, column=0, padx=20, pady=(0, 20), sticky="w")
+        open_chrome_button.grid(row=0, column=1, sticky="e")
         if not self._chrome_controller:
-            button.configure(state="disabled")
-        if button not in self._chrome_buttons:
-            self._chrome_buttons.append(button)
+            open_chrome_button.configure(state="disabled")
+        if open_chrome_button not in self._chrome_buttons:
+            self._chrome_buttons.append(open_chrome_button)
+        self._bonus_open_chrome_button = open_chrome_button
+
+        instruction_label = ctk.CTkLabel(
+            frame,
+            textvariable=self._bonus_instruction_var,
+            justify="left",
+            font=body_font,
+            text_color=VS_TEXT_MUTED,
+            wraplength=360,
+        )
+        instruction_label.grid(row=1, column=0, columnspan=2, padx=20, pady=(0, 12), sticky="w")
 
         get_student_button = ctk.CTkButton(
             frame,
@@ -618,19 +648,95 @@ class TakeAttendanceView(ctk.CTkFrame):
             hover_color=VS_ACCENT_HOVER if self._chrome_controller else VS_DIVIDER,
             text_color=VS_TEXT,
         )
-        get_student_button.grid(row=3, column=0, padx=20, pady=(0, 16), sticky="w")
+        get_student_button.grid(row=2, column=0, columnspan=2, padx=20, pady=(0, 12), sticky="w")
         if not self._chrome_controller:
             get_student_button.configure(state="disabled")
         self._bonus_get_student_button = get_student_button
+
+        student_card = ctk.CTkFrame(
+            frame,
+            corner_radius=12,
+            fg_color=VS_CARD,
+            border_width=1,
+            border_color=VS_DIVIDER,
+        )
+        student_card.grid(row=3, column=0, columnspan=2, padx=20, pady=(0, 12), sticky="ew")
+        student_card.grid_columnconfigure(0, weight=1)
+        student_card.grid_columnconfigure(1, weight=0)
+        self._bonus_student_card = student_card
+
+        name_font = ctk.CTkFont(size=19, weight="bold")
+        meta_font = ctk.CTkFont(size=15)
+        grade_font = ctk.CTkFont(size=15, weight="bold")
+
+        self._bonus_student_name_label = ctk.CTkLabel(
+            student_card,
+            textvariable=self._bonus_student_name_display,
+            font=name_font,
+            text_color=VS_TEXT,
+            justify="left",
+            wraplength=320,
+        )
+        self._bonus_student_name_label.grid(row=0, column=0, sticky="w", padx=16, pady=(16, 6))
+
+        self._bonus_student_grade_label = ctk.CTkLabel(
+            student_card,
+            textvariable=self._bonus_student_grade_display,
+            font=grade_font,
+            text_color=VS_BG,
+            fg_color=VS_ACCENT,
+            corner_radius=8,
+            padx=12,
+            pady=4,
+            justify="center",
+        )
+        self._bonus_student_grade_label.grid(row=0, column=1, sticky="ne", padx=(0, 16), pady=(16, 6))
+
+        self._bonus_student_task_label = ctk.CTkLabel(
+            student_card,
+            textvariable=self._bonus_student_task_display,
+            font=meta_font,
+            text_color=VS_TEXT,
+            justify="left",
+            wraplength=320,
+        )
+        self._bonus_student_task_label.grid(row=1, column=0, columnspan=2, sticky="w", padx=16, pady=(0, 2))
+
+        self._bonus_student_time_label = ctk.CTkLabel(
+            student_card,
+            textvariable=self._bonus_student_time_display,
+            font=meta_font,
+            text_color=VS_TEXT_MUTED,
+            justify="left",
+            wraplength=320,
+        )
+        self._bonus_student_time_label.grid(row=2, column=0, columnspan=2, sticky="w", padx=16, pady=(0, 4))
+
+        self._bonus_student_file_chip = ctk.CTkLabel(
+            student_card,
+            textvariable=self._bonus_student_file_display,
+            font=meta_font,
+            text_color=VS_TEXT,
+            fg_color=VS_SURFACE_ALT,
+            corner_radius=8,
+            padx=12,
+            pady=4,
+            justify="left",
+        )
+        self._bonus_student_file_chip.grid(row=3, column=0, columnspan=2, sticky="w", padx=16, pady=(8, 16))
+
+        self._bonus_student_grade_label.grid_remove()
+        self._bonus_student_file_chip.grid_remove()
+        student_card.grid_remove()
 
         self._bonus_output_label = ctk.CTkLabel(
             frame,
             textvariable=self._bonus_output_var,
             text_color=VS_TEXT_MUTED,
             justify="left",
-            wraplength=320,
+            wraplength=360,
         )
-        self._bonus_output_label.grid(row=4, column=0, padx=20, pady=(0, 20), sticky="nsew")
+        self._bonus_output_label.grid(row=5, column=0, columnspan=2, padx=20, pady=(0, 20), sticky="sw")
 
     def refresh_recent_sessions(self) -> None:
         self._refresh_recent_attendance()
@@ -780,6 +886,12 @@ class TakeAttendanceView(ctk.CTkFrame):
         self._qr_status_var.set("Scanner idle")
         self._set_manual_status("")
         self._set_bonus_status("")
+        self._bonus_instruction_var.set(self._bonus_instruction_launch)
+        self._bonus_student_details_var.set("")
+        self._update_bonus_student_card(None)
+        self._bonus_output_var.set("System messages will appear here.")
+        self._bonus_fetch_in_progress = False
+        self._update_chrome_ui_state()
         if hasattr(self, "_active_header"):
             self._active_header.configure(text=self._default_header_text)
         if hasattr(self, "_end_session_button"):
@@ -793,23 +905,31 @@ class TakeAttendanceView(ctk.CTkFrame):
         self._active_session_id = session_id
         self._session_info_var.set(
             (
-                f"Session {session_id} · {session.chapter_code} "
+                f"Chapter {session.chapter_code} "
                 f"Week {session.week_number}\n"
-                f"{session.campus_name} · {session.room_code}"
             )
         )
-        self._update_status_message(f"Session {session_id} started. Ready for attendance.", tone="success")
+        self._update_status_message(f"Session started. Ready for attendance.", tone="success")
         self._bonus_info_var.set(
             (
-                f"Session {session_id} · {session.chapter_code} Week {session.week_number}\n"
-                f"{session.campus_name} · {session.room_code}"
+                f"Chapter {session.chapter_code} · Week {session.week_number}\n"
             )
         )
         self._set_bonus_status("Ready to record bonus points.")
+        self._bonus_instruction_var.set(self._bonus_instruction_launch)
+        self._bonus_student_details_var.set("")
+        self._update_bonus_student_card(None)
+        self._bonus_output_var.set("System messages will appear here.")
+        self._bonus_fetch_in_progress = False
+        self._update_chrome_ui_state()
         if hasattr(self, "_active_header"):
+            weekday_name = next(
+                (label for label, index in WEEKDAY_OPTIONS if index == session.weekday_index),
+                f"Day {session.weekday_index}",
+            )
             self._active_header.configure(
                 text=(
-                    f"{session.chapter_code} · Week {session.week_number}"
+                    f"{weekday_name} {session.start_hour:02d}-{session.end_hour:02d}"
                     f" — {session.campus_name} · {session.room_code}"
                 )
             )
@@ -846,7 +966,10 @@ class TakeAttendanceView(ctk.CTkFrame):
 
         status_setter("Opening automated Chrome...", tone="info")
         if source == "bonus":
-            self._bonus_output_var.set("Waiting for Chrome to be ready...")
+            self._bonus_instruction_var.set(self._bonus_instruction_launch)
+            self._bonus_student_details_var.set("")
+            self._update_bonus_student_card(None)
+            self._bonus_output_var.set("Opening automated Chrome...")
 
         threading.Thread(target=self._open_chrome_async, args=(source,), daemon=True).start()
 
@@ -863,7 +986,7 @@ class TakeAttendanceView(ctk.CTkFrame):
             message = f"Failed to open Chrome: {exc}"
             tone = "warning"
         else:
-            message = "Chrome automation ready."
+            message = self._chrome_ready_message
             tone = "success"
 
         def _finalize() -> None:
@@ -874,23 +997,33 @@ class TakeAttendanceView(ctk.CTkFrame):
                 button.configure(state=state)
 
             if source == "bonus":
-                if tone == "success" and self._bonus_automation_handlers:
-                    threading.Thread(target=self._execute_bonus_handlers, daemon=True).start()
-                elif tone != "success":
+                if tone == "success":
+                    self._bonus_instruction_var.set(self._bonus_instruction_ready)
+                    self._bonus_output_var.set(self._chrome_ready_message)
+                    if self._bonus_automation_handlers:
+                        threading.Thread(target=self._execute_bonus_handlers, daemon=True).start()
+                else:
+                    self._bonus_instruction_var.set(self._bonus_instruction_launch)
                     self._bonus_output_var.set("Automation aborted due to Chrome launch failure.")
+
+            self._update_chrome_ui_state()
 
         self.after(0, _finalize)
 
     def _handle_bonus_get_student_data(self) -> None:
         if not self._chrome_controller:
-            self._set_bonus_status("Chrome automation is not configured.", tone="warning")
+            # self._set_bonus_status("Chrome automation is not configured.", tone="warning")
             return
 
+        self._bonus_fetch_in_progress = True
         if self._bonus_get_student_button is not None:
             self._bonus_get_student_button.configure(state="disabled")
 
         self._set_bonus_status("Fetching student data...", tone="info")
+        self._bonus_student_details_var.set("")
+        self._update_bonus_student_card(None)
         self._bonus_output_var.set("Fetching student data...")
+        self._update_chrome_ui_state()
 
         threading.Thread(target=self._fetch_bonus_student_data_async, daemon=True).start()
 
@@ -899,41 +1032,54 @@ class TakeAttendanceView(ctk.CTkFrame):
         if controller is None:
             return
 
-        student_name: str | None = None
         error_message: str | None = None
+        payload: dict[str, object] | None = None
 
         try:
             controller.open_browser()
             result = get_bonus_student_data(controller)
-            
-            # Extract student name from the result payload
-            if isinstance(result, BonusAutomationResult) and result.success and result.payload:
-                student_name = result.payload.get("student_name")
+            if isinstance(result, BonusAutomationResult):
+                if result.success:
+                    payload = dict(result.payload or {})
+                else:
+                    error_message = result.summary or "Automation workflow failed."
             else:
-                error_message = result.summary if isinstance(result, BonusAutomationResult) else "Unknown error"
+                error_message = "Automation returned an unexpected response."
         except Exception as exc:  # pragma: no cover - guard automation issues
             error_message = str(exc)
 
         def _finalize() -> None:
-            button = self._bonus_get_student_button
-            if button is not None:
-                state = "normal" if self._chrome_controller else "disabled"
-                button.configure(state=state)
+            self._bonus_fetch_in_progress = False
 
             if error_message:
                 self._set_bonus_status("Failed to fetch student data.", tone="warning")
                 self._bonus_output_var.set(f"Failed to fetch student data: {error_message}")
+                self._bonus_student_details_var.set("")
+                self._update_bonus_student_card(None)
+                self._update_chrome_ui_state()
                 return
 
-            if student_name:
-                normalized = student_name.strip()
-                self.bonus_student_name_var.set(normalized)
-                self.bonus_point_var.set(settings.default_bonus_points)
-                self._bonus_output_var.set(f"Student data received: {normalized}")
+            if payload:
+                student_name_value = payload.get("student_name")
+                if isinstance(student_name_value, str) and student_name_value.strip():
+                    normalized = student_name_value.strip()
+                    self.bonus_student_name_var.set(normalized)
+                default_points = getattr(settings, "default_bonus_points", "")
+                if default_points not in (None, ""):
+                    self.bonus_point_var.set(str(default_points))
+
+                details_text = self._format_bonus_student_details(payload)
+                self._bonus_student_details_var.set(details_text)
+                self._update_bonus_student_card(payload)
+                self._bonus_output_var.set("Student data captured successfully.")
                 self._set_bonus_status("Student data captured.", tone="success")
             else:
+                self._bonus_student_details_var.set("")
+                self._update_bonus_student_card(None)
                 self._set_bonus_status("No student data returned.", tone="warning")
                 self._bonus_output_var.set("No student data returned from automation.")
+
+            self._update_chrome_ui_state()
 
         self.after(0, _finalize)
 
@@ -944,7 +1090,7 @@ class TakeAttendanceView(ctk.CTkFrame):
         if not handlers:
             def _no_handlers() -> None:
                 self._bonus_output_var.set("No bonus automation workflows registered.")
-                self._set_bonus_status("No automation workflows to run.")
+                # self._set_bonus_status("No automation workflows to run.")
 
             self.after(0, _no_handlers)
             return
@@ -952,13 +1098,13 @@ class TakeAttendanceView(ctk.CTkFrame):
         if controller is None:
             def _missing_controller() -> None:
                 self._bonus_output_var.set("Chrome controller is unavailable.")
-                self._set_bonus_status("Chrome automation is not configured.", tone="warning")
+                # self._set_bonus_status("Chrome automation is not configured.", tone="warning")
 
             self.after(0, _missing_controller)
             return
 
         def _announce_start() -> None:
-            self._set_bonus_status("Running bonus automation workflows...", tone="info")
+            # self._set_bonus_status("Running bonus automation workflows...", tone="info")
             self._bonus_output_var.set("Running bonus automation workflows...")
 
         self.after(0, _announce_start)
@@ -989,7 +1135,7 @@ class TakeAttendanceView(ctk.CTkFrame):
         def _render_results() -> None:
             if not results:
                 self._bonus_output_var.set("No bonus automation workflows produced output.")
-                self._set_bonus_status("No automation output received.")
+                # self._set_bonus_status("No automation output received.")
                 return
 
             success_count = sum(1 for res in results if res.success)
@@ -998,7 +1144,7 @@ class TakeAttendanceView(ctk.CTkFrame):
             formatted: list[str] = []
             for res in results:
                 indicator = "✅" if res.success else "⚠️"
-                formatted.append(f"{indicator} {res.handler_name}: {res.summary}")
+                formatted.append(f"{indicator}: {res.summary}")
                 if res.details:
                     for line in res.details.splitlines():
                         line = line.strip()
@@ -1006,17 +1152,6 @@ class TakeAttendanceView(ctk.CTkFrame):
                             formatted.append(f"    • {line}")
 
             self._bonus_output_var.set("\n".join(formatted))
-
-            if failure_count:
-                self._set_bonus_status(
-                    f"Bonus automation finished with {failure_count} issue(s).",
-                    tone="warning",
-                )
-            else:
-                self._set_bonus_status(
-                    f"Bonus automation completed successfully ({success_count} workflow(s)).",
-                    tone="success",
-                )
 
         self.after(0, _render_results)
 
@@ -1200,6 +1335,229 @@ class TakeAttendanceView(ctk.CTkFrame):
         if name:
             return name
         return handler.__class__.__name__
+
+    def _load_icon_image(
+        self,
+        filename: str,
+        size: tuple[int, int],
+    ) -> tuple[Image.Image | None, ctk.CTkImage | None]:
+        try:
+            base_path = Path(__file__).resolve()
+            parents = base_path.parents
+            candidate_roots = []
+            if len(parents) > 3:
+                candidate_roots.append(parents[3] / "assets")
+            if len(parents) > 2:
+                candidate_roots.append(parents[2] / "assets")
+            if len(parents) > 1:
+                candidate_roots.append(parents[1] / "assets")
+
+            assets_root = next((path for path in candidate_roots if path.exists()), None)
+            if assets_root is None:
+                return None, None
+
+            image_path = assets_root / filename
+            if not image_path.exists():
+                return None, None
+            with Image.open(image_path) as img:
+                pil_image = img.copy()
+        except Exception:
+            return None, None
+
+        tk_image = ctk.CTkImage(light_image=pil_image, dark_image=pil_image, size=size)
+        return pil_image, tk_image
+
+    def _update_bonus_student_card(self, payload: Mapping[str, object] | None) -> None:
+        card = self._bonus_student_card
+        if card is None:
+            return
+
+        if not payload:
+            self._bonus_student_name_display.set("")
+            self._bonus_student_task_display.set("")
+            self._bonus_student_time_display.set("")
+            self._bonus_student_grade_display.set("")
+            self._bonus_student_file_display.set("")
+            if self._bonus_student_grade_label is not None:
+                self._bonus_student_grade_label.grid_remove()
+            if self._bonus_student_file_chip is not None:
+                self._bonus_student_file_chip.grid_remove()
+
+            card.grid_remove()
+            return
+
+        def _clean(value: object | None) -> str:
+            if value is None:
+                return ""
+            text = str(value).strip()
+            return text
+
+        student_name = _clean(payload.get("student_name"))
+        task_name = _clean(payload.get("task_name"))
+        submission_time = _clean(payload.get("submission_time"))
+        grade_info = _clean(payload.get("grade_info"))
+        file_name = _clean(payload.get("file_name"))
+
+        self._bonus_student_name_display.set(student_name or "Student details")
+
+        if task_name and self._bonus_student_task_label is not None:
+            display_task = task_name if task_name.startswith("📘") else f"📘 {task_name}"
+            self._bonus_student_task_display.set(display_task)
+            self._bonus_student_task_label.grid()
+        else:
+            self._bonus_student_task_display.set("")
+            if self._bonus_student_task_label is not None:
+                self._bonus_student_task_label.grid_remove()
+
+        if submission_time and self._bonus_student_time_label is not None:
+            prefix = "Submitted " if not submission_time.lower().startswith("submitted") else ""
+            timeline = f"{prefix}{submission_time}"
+            self._bonus_student_time_display.set(timeline if timeline.startswith("⏱") else f"⏱ {timeline}")
+            self._bonus_student_time_label.grid()
+        else:
+            self._bonus_student_time_display.set("")
+            if self._bonus_student_time_label is not None:
+                self._bonus_student_time_label.grid_remove()
+
+        if grade_info and self._bonus_student_grade_label is not None:
+            self._bonus_student_grade_display.set(grade_info)
+            self._bonus_student_grade_label.grid()
+        else:
+            self._bonus_student_grade_display.set("")
+            if self._bonus_student_grade_label is not None:
+                self._bonus_student_grade_label.grid_remove()
+
+        if file_name and self._bonus_student_file_chip is not None:
+            display_file = file_name if file_name.startswith("📎") else f"📎 {file_name}"
+            self._bonus_student_file_display.set(display_file)
+            self._bonus_student_file_chip.grid()
+        else:
+            self._bonus_student_file_display.set("")
+            if self._bonus_student_file_chip is not None:
+                self._bonus_student_file_chip.grid_remove()
+
+        card.grid()
+
+    def _is_chrome_session_active(self) -> bool:
+        controller = self._chrome_controller
+        if controller is None:
+            return False
+        try:
+            return controller.is_browser_open()
+        except Exception:  # pragma: no cover - defensive guard
+            return False
+
+    def _update_chrome_ui_state(self, *, chrome_active: bool | None = None) -> None:
+        controller_available = self._chrome_controller is not None
+        if chrome_active is None:
+            chrome_active = controller_available and self._is_chrome_session_active()
+        else:
+            chrome_active = bool(chrome_active) and controller_available
+
+        button = self._bonus_open_chrome_button
+        if button is not None:
+            if not controller_available:
+                button.configure(state="disabled")
+            else:
+                desired_state = "disabled" if chrome_active else "normal"
+                button.configure(state=desired_state)
+
+        get_button = self._bonus_get_student_button
+        if get_button is not None:
+            if chrome_active and not self._bonus_fetch_in_progress:
+                get_button.configure(state="normal")
+            else:
+                get_button.configure(state="disabled")
+
+        if chrome_active:
+            if self._bonus_instruction_var.get() != self._bonus_instruction_ready:
+                self._bonus_instruction_var.set(self._bonus_instruction_ready)
+            if self._bonus_output_var.get() in {
+                self._chrome_inactive_message,
+                self._bonus_default_output_message,
+            }:
+                self._bonus_output_var.set(self._chrome_ready_message)
+        else:
+            if self._bonus_instruction_var.get() != self._bonus_instruction_launch:
+                self._bonus_instruction_var.set(self._bonus_instruction_launch)
+            if self._bonus_output_var.get() != self._chrome_inactive_message:
+                self._bonus_output_var.set(self._chrome_inactive_message)
+
+    def _probe_chrome_state_async(self) -> None:
+        if self._chrome_state_probe_inflight:
+            return
+
+        if not self._chrome_controller:
+            self._update_chrome_ui_state(chrome_active=False)
+            return
+
+        self._chrome_state_probe_inflight = True
+
+        def _worker() -> None:
+            chrome_active = False
+            controller = self._chrome_controller
+            if controller is not None:
+                try:
+                    chrome_active = controller.is_browser_open()
+                except Exception:
+                    chrome_active = False
+
+            def _finalize() -> None:
+                self._chrome_state_probe_inflight = False
+                if not self.winfo_exists():
+                    return
+                self._update_chrome_ui_state(chrome_active=chrome_active)
+
+            try:
+                self.after(0, _finalize)
+            except Exception:
+                self._chrome_state_probe_inflight = False
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _chrome_state_poll(self) -> None:
+        self._chrome_state_poll_job = None
+        if not self.winfo_exists():
+            return
+        self._probe_chrome_state_async()
+        self._schedule_chrome_state_poll()
+
+    def _schedule_chrome_state_poll(self, delay: int = 3000) -> None:
+        if self._chrome_state_poll_job is not None:
+            return
+        if not self.winfo_exists():
+            return
+        self._chrome_state_poll_job = self.after(delay, self._chrome_state_poll)
+
+    def _format_bonus_student_details(self, payload: Mapping[str, object]) -> str:
+        field_labels = [
+            ("student_name", "Student"),
+            ("task_name", "Task"),
+            ("submission_time", "Submitted"),
+            ("grade_info", "Grade"),
+            ("file_name", "File"),
+        ]
+
+        lines: list[str] = []
+        for key, label in field_labels:
+            value = payload.get(key)
+            if value is None:
+                continue
+
+            text = str(value).strip()
+            if text:
+                lines.append(f"{label}: {text}")
+
+        return "\n".join(lines)
+
+    def destroy(self) -> None:  # pragma: no cover - lifecycle hook
+        if self._chrome_state_poll_job is not None:
+            try:
+                self.after_cancel(self._chrome_state_poll_job)
+            except Exception:
+                pass
+            self._chrome_state_poll_job = None
+        super().destroy()
 
 
 class TemplateDialog(ctk.CTkToplevel):
