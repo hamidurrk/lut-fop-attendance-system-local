@@ -87,6 +87,7 @@ class AttendanceApp:
 
         # Load saved window position if available
         self._restore_window_position()
+        self._root.after(0, self._maximize_window)
 
         # Bind window movement/configure events
         self._root.bind("<Configure>", self._handle_window_configure)
@@ -166,3 +167,13 @@ class AttendanceApp:
 
     def run(self) -> None:
         self._root.mainloop()
+
+    def _maximize_window(self) -> None:
+        try:
+            if os.name == "nt":
+                self._root.state("zoomed")
+            else:
+                self._root.attributes("-zoomed", True)
+        except Exception:
+            # Ignore platforms that don't support zoomed state
+            pass

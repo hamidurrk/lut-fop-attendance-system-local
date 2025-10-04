@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import tkinter.messagebox as messagebox
 from tkinter import BooleanVar, IntVar, StringVar
-from typing import Callable, Mapping
+from typing import Any, Callable, Mapping, Optional
 import threading
+import time
 from pathlib import Path
 
 import customtkinter as ctk
-from PIL import Image
+from PIL import Image, ImageOps
 
 from attendance_app.automation import (
     ChromeAutomationError,
@@ -16,7 +17,7 @@ from attendance_app.automation import (
 )
 from attendance_app.automation.bonus_workflows import BonusAutomationResult
 from attendance_app.models import AttendanceSession, BonusRecord, SessionTemplate, Student
-from attendance_app.services import AttendanceService, DuplicateAttendanceError, DuplicateSessionError
+from attendance_app.services import AttendanceService, DuplicateAttendanceError, DuplicateSessionError, QRScanner
 from attendance_app.ui.theme import (
     VS_ACCENT,
     VS_ACCENT_HOVER,
@@ -114,6 +115,33 @@ class TakeAttendanceView(ctk.CTkFrame):
         ] = []
         self._bonus_get_student_button: ctk.CTkButton | None = None
 
+        self._qr_scanner = QRScanner(camera_index=settings.qr_camera_index)
+        self._qr_control_button: ctk.CTkButton | None = None
+        self._qr_status_label: ctk.CTkLabel | None = None
+        self._qr_preview_frame: ctk.CTkFrame | None = None
+        self._qr_preview_label: ctk.CTkLabel | None = None
+        self._qr_preview_image: ctk.CTkImage | None = None
+        self._qr_preview_size: tuple[int, int] = (420, 420)
+        placeholder_source = Image.new("RGB", self._qr_preview_size, color=(24, 24, 24))
+        self._qr_preview_placeholder = ctk.CTkImage(
+            light_image=placeholder_source,
+            dark_image=placeholder_source.copy(),
+            size=self._qr_preview_size,
+        )
+        self._qr_preview_busy = False
+        self._qr_last_payload: Optional[str] = None
+        self._qr_last_scan_time: float = 0.0
+        self._qr_debounce_seconds: float = 1.2
+        self._qr_default_border_color = VS_DIVIDER
+        self._qr_scan_border_color = VS_SUCCESS
+        self._qr_scan_border_duration_ms: int = 900
+        self._qr_border_reset_job: str | None = None
+        self._qr_auto_record_var = ctk.BooleanVar(value=bool(getattr(settings, "qr_auto_record", False)))
+        self._qr_auto_record_switch: ctk.CTkSwitch | None = None
+        self._qr_last_auto_record_payload: Optional[str] = None
+        self._qr_stop_fg_color = "#f26d6d"
+        self._qr_stop_hover_color = "#d95a5a"
+
         self._build_widgets()
         self._load_templates()
         self.refresh_recent_sessions()
@@ -173,6 +201,69 @@ class TakeAttendanceView(ctk.CTkFrame):
         if self._bonus_status_label is not None:
             self._bonus_status_label.configure(text_color=color_map.get(tone, VS_TEXT_MUTED))
 
+    def _set_qr_status(self, message: str, tone: str = "info") -> None:
+        self._qr_status_var.set(message)
+        color_map = {
+            "info": VS_TEXT_MUTED,
+            "success": VS_SUCCESS,
+            "warning": VS_WARNING,
+        }
+        if self._qr_status_label is not None:
+            self._qr_status_label.configure(text_color=color_map.get(tone, VS_TEXT_MUTED))
+
+    def _configure_qr_control(self, *, running: bool) -> None:
+        if self._qr_control_button is None:
+            return
+        if running:
+            self._qr_control_button.configure(
+                state="normal",
+                text="Stop scanner",
+                fg_color=self._qr_stop_fg_color,
+                hover_color=self._qr_stop_hover_color,
+                text_color=VS_TEXT,
+            )
+        else:
+            self._qr_control_button.configure(
+                state="normal",
+                text="Start scanner",
+                fg_color=VS_ACCENT,
+                hover_color=VS_ACCENT_HOVER,
+                text_color=VS_TEXT,
+            )
+
+    def _set_qr_preview_border(self, color: str | None = None) -> None:
+        if self._qr_preview_frame is None:
+            return
+        border_color = color or self._qr_default_border_color
+        self._qr_preview_frame.configure(border_color=border_color)
+
+    def _cancel_qr_border_reset(self) -> None:
+        if self._qr_border_reset_job is None:
+            return
+        try:
+            self.after_cancel(self._qr_border_reset_job)
+        except Exception:
+            pass
+        finally:
+            self._qr_border_reset_job = None
+
+    def _schedule_qr_border_reset(self, delay_ms: int) -> None:
+        self._cancel_qr_border_reset()
+        if delay_ms <= 0:
+            self._set_qr_preview_border(None)
+            return
+        if not self.winfo_exists():
+            return
+        self._qr_border_reset_job = self.after(delay_ms, self._reset_qr_preview_border)
+
+    def _reset_qr_preview_border(self) -> None:
+        self._qr_border_reset_job = None
+        self._set_qr_preview_border(None)
+
+    def _handle_auto_record_toggle(self) -> None:
+        # Reset the last auto-record payload so the next scan can trigger a recording
+        self._qr_last_auto_record_payload = None
+
     # ------------------------------------------------------------------
     # Layout construction
     # ------------------------------------------------------------------
@@ -182,17 +273,18 @@ class TakeAttendanceView(ctk.CTkFrame):
 
         container = ctk.CTkFrame(self, corner_radius=14, fg_color=VS_SURFACE)
         container.grid(row=0, column=0, padx=24, pady=24, sticky="nsew")
-        container.grid_rowconfigure(0, weight=1)
-        container.grid_columnconfigure(0, weight=1)
+        container.grid_rowconfigure((0, 2), weight=1)
+        container.grid_rowconfigure(1, weight=1)
+        container.grid_columnconfigure((0, 2), weight=1)
+        container.grid_columnconfigure(1, weight=1)
 
         self._session_form_frame = ctk.CTkFrame(container, corner_radius=12, fg_color=VS_SURFACE_ALT)
-        self._session_form_frame.grid(row=0, column=0, padx=24, pady=24, sticky="nsew")
+        self._session_form_frame.grid(row=1, column=1, padx=24, pady=24)
         self._session_form_frame.grid_columnconfigure(0, weight=1)
-        self._session_form_frame.grid_columnconfigure(1, weight=1)
         self._build_session_form(self._session_form_frame)
 
         self._attendance_container = ctk.CTkFrame(container, fg_color=VS_SURFACE)
-        self._attendance_container.grid(row=0, column=0, padx=24, pady=24, sticky="nsew")
+        self._attendance_container.grid(row=1, column=1, padx=24, pady=24, sticky="nsew")
         self._attendance_container.grid_remove()
         self._attendance_container.grid_rowconfigure(0, weight=0)
         self._attendance_container.grid_rowconfigure(1, weight=1)
@@ -237,10 +329,25 @@ class TakeAttendanceView(ctk.CTkFrame):
         attendance_tab = self._tab_view.tab("Record attendance")
         bonus_tab = self._tab_view.tab("Record bonus")
 
+        segmented_button = self._tab_view._segmented_button
+        segmented_button.configure(
+            dynamic_resizing=False,
+            width=440,
+            height=46,
+            corner_radius=18,
+            fg_color=VS_DIVIDER,
+            selected_color=VS_ACCENT,
+            selected_hover_color=VS_ACCENT_HOVER,
+            unselected_color=VS_SURFACE_ALT,
+            unselected_hover_color=VS_DIVIDER,
+            text_color=VS_TEXT,
+            font=ctk.CTkFont(size=15, weight="bold"),
+        )
+        segmented_button.grid_configure(padx=72, pady=(6, 20), sticky="n")
+
         attendance_tab.grid_rowconfigure(0, weight=1)
         attendance_tab.grid_columnconfigure(0, weight=3, uniform="activity")
         attendance_tab.grid_columnconfigure(1, weight=2, uniform="activity")
-
         bonus_tab.grid_rowconfigure(0, weight=1)
         bonus_tab.grid_columnconfigure(0, weight=3, uniform="activity")
         bonus_tab.grid_columnconfigure(1, weight=2, uniform="activity")
@@ -250,31 +357,54 @@ class TakeAttendanceView(ctk.CTkFrame):
 
     def _build_session_form(self, frame: ctk.CTkFrame) -> None:
         frame.grid_columnconfigure(0, weight=1)
-        frame.grid_columnconfigure(1, weight=1)
 
-        header_row = ctk.CTkFrame(frame, fg_color=VS_SURFACE_ALT)
-        header_row.grid(row=0, column=0, columnspan=2, padx=24, pady=(24, 12), sticky="ew")
+        header_font = ctk.CTkFont(size=28, weight="bold")
+        body_font = ctk.CTkFont(size=18)
+        label_font = ctk.CTkFont(size=18, weight="bold")
+        hint_font = ctk.CTkFont(size=14)
+
+        header_row = ctk.CTkFrame(frame, fg_color="transparent")
+        header_row.grid(row=0, column=0, padx=32, pady=(28, 12), sticky="ew")
         header_row.grid_columnconfigure(0, weight=1)
 
         ctk.CTkLabel(
             header_row,
             text="Select session",
-            font=ctk.CTkFont(size=20, weight="bold"),
+            font=header_font,
             text_color=VS_TEXT,
         ).grid(row=0, column=0, sticky="w")
 
         ctk.CTkButton(
             header_row,
             text="Create new session",
-            width=180,
+            width=200,
+            height=44,
+            font=ctk.CTkFont(size=16, weight="bold"),
             fg_color=VS_ACCENT,
             hover_color=VS_ACCENT_HOVER,
             text_color=VS_TEXT,
             command=self._open_template_dialog,
         ).grid(row=0, column=1, sticky="e")
 
-        self.template_menu = ctk.CTkOptionMenu(
+        template_card = ctk.CTkFrame(
             frame,
+            corner_radius=18,
+            fg_color=VS_SURFACE_ALT,
+            border_width=1,
+            border_color=VS_DIVIDER,
+        )
+        template_card.grid(row=1, column=0, padx=32, pady=(8, 20), sticky="ew")
+        template_card.grid_columnconfigure(0, weight=1)
+
+        ctk.CTkLabel(
+            template_card,
+            text="Session",
+            font=label_font,
+            text_color=VS_TEXT,
+        ).grid(row=0, column=0, sticky="w", padx=24, pady=(20, 8))
+
+        self.template_menu = ctk.CTkOptionMenu(
+            template_card,
             values=[self.selected_template_label.get()],
             variable=self.selected_template_label,
             command=self._handle_template_select,
@@ -282,66 +412,101 @@ class TakeAttendanceView(ctk.CTkFrame):
             button_color=VS_ACCENT,
             button_hover_color=VS_ACCENT_HOVER,
             text_color=VS_TEXT,
+            width=420,
+            height=44,
+            font=body_font,
         )
-        self.template_menu.grid(row=1, column=0, columnspan=2, padx=24, pady=(0, 16), sticky="ew")
+        self.template_menu.grid(row=1, column=0, padx=24, pady=(0, 16), sticky="ew")
 
-        info_card = ctk.CTkFrame(frame, corner_radius=10, fg_color=VS_CARD)
-        info_card.grid(row=2, column=0, columnspan=2, padx=24, pady=(0, 20), sticky="ew")
-        info_card.grid_columnconfigure(0, weight=1)
+        divider = ctk.CTkFrame(template_card, height=1, fg_color=VS_DIVIDER)
+        divider.grid(row=2, column=0, padx=24, pady=4, sticky="ew")
+
         self._template_info_label = ctk.CTkLabel(
-            info_card,
+            template_card,
             text="No template selected",
+            font=body_font,
             justify="left",
             text_color=VS_TEXT_MUTED,
+            wraplength=520,
         )
-        self._template_info_label.grid(row=0, column=0, padx=16, pady=16, sticky="w")
+        self._template_info_label.grid(row=3, column=0, padx=24, pady=(8, 20), sticky="w")
 
-        label_font = ctk.CTkFont(size=16)
+        form_card = ctk.CTkFrame(
+            frame,
+            corner_radius=18,
+            fg_color=VS_SURFACE_ALT,
+            border_width=1,
+            border_color=VS_DIVIDER,
+        )
+        form_card.grid(row=2, column=0, padx=32, pady=(0, 16), sticky="ew")
+        form_card.grid_columnconfigure((0, 1), weight=1)
 
-        ctk.CTkLabel(frame, text="Chapter code", text_color=VS_TEXT, font=label_font).grid(
-            row=3, column=0, padx=24, pady=6, sticky="w"
+        ctk.CTkLabel(form_card, text="Chapter code", font=label_font, text_color=VS_TEXT).grid(
+            row=0, column=0, padx=24, pady=(20, 6), sticky="w"
         )
         chapter_entry = ctk.CTkEntry(
-            frame,
+            form_card,
             textvariable=self.chapter_var,
             fg_color=VS_BG,
             border_color=VS_BORDER,
             text_color=VS_TEXT,
+            placeholder_text="e.g. CS-A1110",
             placeholder_text_color=VS_TEXT_MUTED,
+            font=body_font,
+            height=42,
         )
-        chapter_entry.grid(row=3, column=1, padx=24, pady=6, sticky="ew")
+        chapter_entry.grid(row=1, column=0, padx=24, pady=(0, 20), sticky="ew")
 
-        ctk.CTkLabel(frame, text="Week", text_color=VS_TEXT, font=label_font).grid(
-            row=4, column=0, padx=24, pady=6, sticky="w"
+        ctk.CTkLabel(form_card, text="Week", font=label_font, text_color=VS_TEXT).grid(
+            row=0, column=1, padx=24, pady=(20, 6), sticky="w"
         )
         week_menu = ctk.CTkOptionMenu(
-            frame,
+            form_card,
             values=self.WEEK_OPTIONS,
             variable=self.week_var,
             fg_color=VS_BG,
             button_color=VS_ACCENT,
             button_hover_color=VS_ACCENT_HOVER,
             text_color=VS_TEXT,
+            font=body_font,
+            width=150,
+            height=42,
         )
-        week_menu.grid(row=4, column=1, padx=24, pady=6, sticky="ew")
+        week_menu.grid(row=1, column=1, padx=24, pady=(0, 20), sticky="ew")
 
-        self._status_label = ctk.CTkLabel(frame, textvariable=self._status_var, text_color=VS_TEXT_MUTED)
-        self._status_label.grid(row=5, column=0, columnspan=2, padx=24, pady=(12, 8), sticky="w")
+        ctk.CTkLabel(
+            form_card,
+            text="Select a template and confirm the chapter/week to open a new attendance session.",
+            font=hint_font,
+            text_color=VS_TEXT_MUTED,
+            justify="left",
+            wraplength=520,
+        ).grid(row=2, column=0, columnspan=2, padx=24, pady=(0, 20), sticky="w")
+
+        self._status_label = ctk.CTkLabel(
+            frame,
+            textvariable=self._status_var,
+            font=hint_font,
+            text_color=VS_TEXT_MUTED,
+        )
+        self._status_label.grid(row=3, column=0, padx=32, pady=(4, 10), sticky="w")
         self._update_status_message(self._status_var.get())
 
         start_btn = ctk.CTkButton(
             frame,
             text="Start session",
+            height=52,
+            font=ctk.CTkFont(size=18, weight="bold"),
             command=self._handle_start_session,
             fg_color=VS_ACCENT,
             hover_color=VS_ACCENT_HOVER,
             text_color=VS_TEXT,
         )
-        start_btn.grid(row=6, column=0, columnspan=2, padx=24, pady=(4, 24), sticky="ew")
+        start_btn.grid(row=4, column=0, padx=32, pady=(4, 32), sticky="ew")
 
     def _build_attendance_tab(self, tab: ctk.CTkFrame) -> None:
         self._left_stack = ctk.CTkFrame(tab, fg_color=VS_SURFACE)
-        self._left_stack.grid(row=0, column=0, sticky="nsew", padx=(0, 12))
+        self._left_stack.grid(row=0, column=0, sticky="nsew", padx=(12, 12), pady=(12, 12))
         self._left_stack.grid_columnconfigure(0, weight=1)
         self._left_stack.grid_rowconfigure(0, weight=1)
         self._left_stack.grid_rowconfigure(1, weight=2)
@@ -355,12 +520,12 @@ class TakeAttendanceView(ctk.CTkFrame):
         self._build_recent_panel(self._recent_frame)
 
         self._qr_frame = ctk.CTkFrame(tab, corner_radius=12, fg_color=VS_SURFACE_ALT)
-        self._qr_frame.grid(row=0, column=1, sticky="nsew", padx=(12, 0))
+        self._qr_frame.grid(row=0, column=1, sticky="nsew", padx=(12, 12), pady=(12, 12))
         self._build_qr_panel(self._qr_frame)
 
     def _build_bonus_tab(self, tab: ctk.CTkFrame) -> None:
         self._bonus_left_stack = ctk.CTkFrame(tab, fg_color=VS_SURFACE)
-        self._bonus_left_stack.grid(row=0, column=0, sticky="nsew", padx=(0, 12))
+        self._bonus_left_stack.grid(row=0, column=0, sticky="nsew", padx=(12, 12), pady=(12, 12))
         self._bonus_left_stack.grid_columnconfigure(0, weight=1)
         self._bonus_left_stack.grid_rowconfigure(0, weight=1)
         self._bonus_left_stack.grid_rowconfigure(1, weight=2)
@@ -374,7 +539,7 @@ class TakeAttendanceView(ctk.CTkFrame):
         self._build_bonus_recent_panel(self._bonus_recent_frame)
 
         self._bonus_action_frame = ctk.CTkFrame(tab, corner_radius=12, fg_color=VS_SURFACE_ALT)
-        self._bonus_action_frame.grid(row=0, column=1, sticky="nsew", padx=(12, 0))
+        self._bonus_action_frame.grid(row=0, column=1, sticky="nsew", padx=(12, 12), pady=(12, 12))
         self._build_bonus_action_panel(self._bonus_action_frame)
 
     def _build_recent_panel(self, frame: ctk.CTkFrame) -> None:
@@ -383,6 +548,7 @@ class TakeAttendanceView(ctk.CTkFrame):
 
         header_font = ctk.CTkFont(size=20, weight="bold")
         label_font = ctk.CTkFont(size=18)
+        preview_width = self._qr_preview_size[0]
 
         ctk.CTkLabel(frame, text="Recently logged students", font=header_font, text_color=VS_TEXT).grid(
             row=0, column=0, padx=20, pady=(20, 8), sticky="w"
@@ -394,8 +560,8 @@ class TakeAttendanceView(ctk.CTkFrame):
 
         ctk.CTkSwitch(
             toggle_row,
-            text="Hide student ID",
             variable=self._hide_student_id_var,
+            text="Hide student IDs",
             onvalue=True,
             offvalue=False,
             command=self.refresh_recent_sessions,
@@ -480,27 +646,107 @@ class TakeAttendanceView(ctk.CTkFrame):
         ).grid(row=0, column=2, sticky="e")
 
     def _build_qr_panel(self, frame: ctk.CTkFrame) -> None:
-        frame.grid_rowconfigure(1, weight=1)
+        frame.grid_columnconfigure(0, weight=1)
+        frame.grid_rowconfigure(2, weight=1)
         header_font = ctk.CTkFont(size=20, weight="bold")
         body_font = ctk.CTkFont(size=15)
+        message_font = ctk.CTkFont(size=18, weight="normal")
+        preview_width = self._qr_preview_size[0]
 
-        ctk.CTkLabel(frame, text="QR scanner", font=header_font, text_color=VS_TEXT).grid(
-            row=0, column=0, padx=20, pady=(20, 8), sticky="w"
+        header_row = ctk.CTkFrame(frame, fg_color=VS_SURFACE_ALT)
+        header_row.grid(row=0, column=0, padx=20, pady=(20, 12), sticky="ew")
+        header_row.grid_columnconfigure(0, weight=1)
+
+        ctk.CTkLabel(header_row, text="QR scanner", font=header_font, text_color=VS_TEXT).grid(
+            row=0, column=0, sticky="w"
         )
+
+        self._qr_control_button = ctk.CTkButton(
+            header_row,
+            text="Start scanner",
+            command=self._handle_toggle_qr_scanner,
+            width=200,
+            fg_color=VS_ACCENT,
+            hover_color=VS_ACCENT_HOVER,
+            text_color=VS_TEXT,
+        )
+        self._qr_control_button.grid(row=0, column=1, sticky="e")
+        self._qr_control_button.configure(state="normal")
+
         ctk.CTkLabel(
             frame,
             text=(
-                "QR scanner placeholder\n"
-                "Integrate camera feed via OpenCV\n"
-                "to enable automatic detection."
+                "Use the scanner to capture student IDs from QR codes. "
             ),
             justify="left",
+            wraplength=preview_width,
             font=body_font,
             text_color=VS_TEXT_MUTED,
-        ).grid(row=1, column=0, padx=20, pady=16, sticky="nsew")
-        ctk.CTkLabel(frame, textvariable=self._qr_status_var, text_color=VS_TEXT_MUTED, font=body_font).grid(
-            row=2, column=0, padx=20, pady=(4, 20), sticky="w"
+        ).grid(row=1, column=0, padx=20, pady=(0, 12), sticky="w")
+
+        preview_container = ctk.CTkFrame(frame, fg_color="transparent")
+        preview_container.grid(row=2, column=0, padx=20, pady=(0, 16), sticky="nsew")
+        preview_container.grid_columnconfigure(0, weight=1)
+        preview_container.grid_rowconfigure(0, weight=1)
+
+        preview_card = ctk.CTkFrame(preview_container, corner_radius=16, fg_color=VS_CARD)
+        preview_card.grid(row=0, column=0, sticky="nsew")
+        preview_card.grid_columnconfigure(0, weight=1)
+        preview_card.grid_rowconfigure(1, weight=1)
+
+        self._qr_status_label = ctk.CTkLabel(
+            preview_card,
+            textvariable=self._qr_status_var,
+            text_color=VS_TEXT,
+            font=message_font,
+            justify="center",
+            wraplength=preview_width,
         )
+        self._qr_status_label.grid(row=0, column=0, padx=16, pady=(18, 8), sticky="ew")
+
+        self._qr_preview_frame = ctk.CTkFrame(
+            preview_card,
+            corner_radius=18,
+            fg_color=VS_SURFACE_ALT,
+            border_width=3,
+            border_color=self._qr_default_border_color,
+        )
+        self._qr_preview_frame.grid(row=1, column=0, padx=16, pady=(0, 16), sticky="nsew")
+        self._qr_preview_frame.grid_propagate(False)
+        self._qr_preview_frame.configure(width=self._qr_preview_size[0], height=self._qr_preview_size[1])
+
+        self._qr_preview_label = ctk.CTkLabel(
+            self._qr_preview_frame,
+            text="Camera preview inactive",
+            text_color=VS_TEXT_MUTED,
+            font=ctk.CTkFont(size=16),
+            justify="center",
+            image=self._qr_preview_placeholder,
+            compound="center",
+        )
+        self._qr_preview_label.pack(expand=True, fill="both", padx=12, pady=12)
+
+        self._qr_auto_record_switch = ctk.CTkSwitch(
+            preview_card,
+            text="Auto-record attendance",
+            variable=self._qr_auto_record_var,
+            command=self._handle_auto_record_toggle,
+            onvalue=True,
+            offvalue=False,
+        )
+        self._qr_auto_record_switch.grid(row=2, column=0, padx=18, pady=(0, 18), sticky="w")
+
+        ctk.CTkLabel(
+            frame,
+            text="Keep the QR code within the frame. You'll see the details fill in automatically when detected.",
+            justify="left",
+            wraplength=preview_width,
+            font=body_font,
+            text_color=VS_TEXT_MUTED,
+        ).grid(row=3, column=0, padx=20, pady=(0, 12), sticky="w")
+
+        self._configure_qr_control(running=False)
+        self._set_qr_status(self._qr_status_var.get())
 
     def _build_bonus_manual_panel(self, frame: ctk.CTkFrame) -> None:
         frame.grid_columnconfigure(0, weight=1)
@@ -596,8 +842,7 @@ class TakeAttendanceView(ctk.CTkFrame):
         empty_label.pack(anchor="w", padx=12, pady=6)
 
     def _build_bonus_action_panel(self, frame: ctk.CTkFrame) -> None:
-        frame.grid_columnconfigure(0, weight=1)
-        frame.grid_columnconfigure(1, weight=0)
+        frame.grid_columnconfigure((0, 1), weight=1)
         frame.grid_rowconfigure(4, weight=1)
 
         header_font = ctk.CTkFont(size=20, weight="bold")
@@ -635,7 +880,7 @@ class TakeAttendanceView(ctk.CTkFrame):
             justify="left",
             font=body_font,
             text_color=VS_TEXT_MUTED,
-            wraplength=360,
+            wraplength=520,
         )
         instruction_label.grid(row=1, column=0, columnspan=2, padx=20, pady=(0, 12), sticky="w")
 
@@ -648,7 +893,7 @@ class TakeAttendanceView(ctk.CTkFrame):
             hover_color=VS_ACCENT_HOVER if self._chrome_controller else VS_DIVIDER,
             text_color=VS_TEXT,
         )
-        get_student_button.grid(row=2, column=0, columnspan=2, padx=20, pady=(0, 12), sticky="w")
+        get_student_button.grid(row=2, column=0, columnspan=2, padx=20, pady=(0, 12), sticky="ew")
         if not self._chrome_controller:
             get_student_button.configure(state="disabled")
         self._bonus_get_student_button = get_student_button
@@ -660,7 +905,7 @@ class TakeAttendanceView(ctk.CTkFrame):
             border_width=1,
             border_color=VS_DIVIDER,
         )
-        student_card.grid(row=3, column=0, columnspan=2, padx=20, pady=(0, 12), sticky="ew")
+        student_card.grid(row=3, column=0, columnspan=2, padx=20, pady=(0, 12), sticky="nsew")
         student_card.grid_columnconfigure(0, weight=1)
         student_card.grid_columnconfigure(1, weight=0)
         self._bonus_student_card = student_card
@@ -734,7 +979,7 @@ class TakeAttendanceView(ctk.CTkFrame):
             textvariable=self._bonus_output_var,
             text_color=VS_TEXT_MUTED,
             justify="left",
-            wraplength=360,
+            wraplength=520,
         )
         self._bonus_output_label.grid(row=5, column=0, columnspan=2, padx=20, pady=(0, 20), sticky="sw")
 
@@ -798,9 +1043,9 @@ class TakeAttendanceView(ctk.CTkFrame):
     def _load_templates(self) -> None:
         self._templates = self._service.list_session_templates()
         if not self._templates:
-            self.template_menu.configure(values=["No session templates"], state="disabled")
-            self.selected_template_label.set("No session templates")
-            self._template_info_label.configure(text="Create a session template to begin.")
+            self.template_menu.configure(values=["No sessions"], state="disabled")
+            self.selected_template_label.set("No sessions")
+            self._template_info_label.configure(text="Create a session to begin.")
             return
 
         values = [template.display_label() for template in self._templates]
@@ -818,8 +1063,8 @@ class TakeAttendanceView(ctk.CTkFrame):
                 self.selected_template_label.set(choice)
                 self._template_info_label.configure(
                     text=(
-                        f"{template.campus_name}\n"
                         f"{template.weekday_label()} · {template.start_hour:02d}-{template.end_hour:02d}\n"
+                        f"{template.campus_name}\n"
                         f"Room {template.room_code}"
                     )
                 )
@@ -883,7 +1128,17 @@ class TakeAttendanceView(ctk.CTkFrame):
         self.student_id_var.set("")
         self.bonus_student_name_var.set("")
         self.bonus_point_var.set("")
-        self._qr_status_var.set("Scanner idle")
+        if self._qr_scanner.is_running:
+            self._stop_qr_scanner()
+        else:
+            self._set_qr_status("Scanner idle")
+            self._configure_qr_control(running=False)
+            if self._qr_preview_label is not None:
+                self._qr_preview_label.configure(image=self._qr_preview_placeholder, text="Camera preview inactive")
+            self._qr_preview_image = None
+            self._qr_preview_busy = False
+            self._set_qr_preview_border(None)
+        self._qr_last_auto_record_payload = None
         self._set_manual_status("")
         self._set_bonus_status("")
         self._bonus_instruction_var.set(self._bonus_instruction_launch)
@@ -892,6 +1147,14 @@ class TakeAttendanceView(ctk.CTkFrame):
         self._bonus_output_var.set("System messages will appear here.")
         self._bonus_fetch_in_progress = False
         self._update_chrome_ui_state()
+        self._set_qr_status("Scanner idle")
+        self._configure_qr_control(running=False)
+        if self._qr_preview_label is not None:
+            self._qr_preview_label.configure(image=self._qr_preview_placeholder, text="Camera preview inactive")
+        self._qr_preview_image = None
+        self._qr_preview_busy = False
+        self._set_qr_preview_border(None)
+        self._qr_preview_busy = False
         if hasattr(self, "_active_header"):
             self._active_header.configure(text=self._default_header_text)
         if hasattr(self, "_end_session_button"):
@@ -941,7 +1204,7 @@ class TakeAttendanceView(ctk.CTkFrame):
     def _show_session_form(self) -> None:
         self._attendance_container.grid_remove()
         self._session_form_frame.grid()
-        self._update_status_message("Choose a session template to get started.")
+        self._update_status_message("Choose a session to get started.")
         if hasattr(self, "_active_header"):
             self._active_header.configure(text=self._default_header_text)
         if hasattr(self, "_end_session_button"):
@@ -972,6 +1235,12 @@ class TakeAttendanceView(ctk.CTkFrame):
             self._bonus_output_var.set("Opening automated Chrome...")
 
         threading.Thread(target=self._open_chrome_async, args=(source,), daemon=True).start()
+
+    def _handle_toggle_qr_scanner(self) -> None:
+        if self._qr_scanner.is_running:
+            self._stop_qr_scanner()
+        else:
+            self._start_qr_scanner()
 
     def _open_chrome_async(self, source: str) -> None:
         if not self._chrome_controller:
@@ -1155,17 +1424,17 @@ class TakeAttendanceView(ctk.CTkFrame):
 
         self.after(0, _render_results)
 
-    def _handle_manual_record(self) -> None:
-        self._set_manual_status("")
-
+    def _record_attendance_entry(
+        self,
+        *,
+        source: str,
+    ) -> tuple[bool, str, str, Optional[str], Optional[str]]:
         if not self._active_session_id:
-            self._set_manual_status("Start a session before recording attendance.", tone="warning")
-            return
+            return False, "Start a session before recording attendance.", "warning", None, "no-session"
 
         student_code = self.student_id_var.get().strip()
         if not student_code:
-            self._set_manual_status("Student ID is required.", tone="warning")
-            return
+            return False, "Student ID is required.", "warning", None, "missing-id"
 
         student_name = self.student_name_var.get().strip()
         if student_name:
@@ -1183,18 +1452,22 @@ class TakeAttendanceView(ctk.CTkFrame):
         )
 
         try:
-            self._service.record_attendance(self._active_session_id, student, source="manual")
+            self._service.record_attendance(self._active_session_id, student, source=source)
         except DuplicateAttendanceError:
-            self._set_manual_status(f"{student_code} is already logged for this session.", tone="warning")
-            return
+            return False, f"{student_code} is already logged for this session.", "warning", student_code, "duplicate"
         except Exception as exc:  # pragma: no cover - guard unexpected issues
-            self._set_manual_status(f"Failed to record attendance: {exc}", tone="warning")
-            return
+            return False, f"Failed to record attendance: {exc}", "warning", student_code, "error"
 
-        self.student_id_var.set("")
-        self.student_name_var.set("")
         self.refresh_recent_sessions()
-        self._set_manual_status(f"Recorded {student_code}.", tone="success")
+        return True, f"Recorded {student_name}", "success", student_code, None
+
+    def _handle_manual_record(self) -> None:
+        self._set_manual_status("")
+        success, message, tone, _, _ = self._record_attendance_entry(source="manual")
+        self._set_manual_status(message, tone=tone)
+        if success:
+            self.student_id_var.set("")
+            self.student_name_var.set("")
 
     def _handle_bonus_record(self) -> None:
         self._set_bonus_status("")
@@ -1234,6 +1507,193 @@ class TakeAttendanceView(ctk.CTkFrame):
         self._set_bonus_status(f"Recorded bonus for {student_name}.", tone="success")
         self.refresh_recent_sessions()
 
+    def _start_qr_scanner(self) -> None:
+        if self._qr_control_button is not None:
+            self._qr_control_button.configure(state="disabled")
+        self._set_qr_status("Starting scanner…")
+        self._cancel_qr_border_reset()
+        self._set_qr_preview_border(None)
+        if self._qr_preview_label is not None:
+            self._qr_preview_label.configure(image=self._qr_preview_placeholder, text="Camera preview inactive")
+        self._qr_preview_image = None
+        self._qr_last_auto_record_payload = None
+
+        def _start() -> None:
+            def _on_payload(payload: str) -> None:
+                self.after(0, lambda: self._handle_qr_payload(payload))
+
+            def _on_error(message: str) -> None:
+                self.after(0, lambda: self._handle_qr_error(message))
+
+            def _on_frame(frame: Any) -> None:
+                self.after(0, lambda f=frame: self._handle_qr_frame(f))
+
+            started = self._qr_scanner.start(_on_payload, on_error=_on_error, on_frame=_on_frame)
+
+            def _finalize() -> None:
+                if not self.winfo_exists():
+                    return
+                if not started:
+                    if self._qr_status_var.get() in ("Starting scanner…", "Scanner idle"):
+                        self._set_qr_status("Scanner unavailable.", tone="warning")
+                    self._configure_qr_control(running=False)
+                    self._set_qr_preview_border(None)
+                    return
+
+                self._configure_qr_control(running=True)
+                if self._qr_preview_label is not None:
+                    self._qr_preview_label.configure(image=self._qr_preview_placeholder, text="Waiting for camera…")
+                self._set_qr_preview_border(None)
+                self._set_qr_status("Scanner active", tone="success")
+
+            self.after(0, _finalize)
+
+        threading.Thread(target=_start, daemon=True).start()
+
+    def _stop_qr_scanner(self) -> None:
+        if self._qr_control_button is not None:
+            self._qr_control_button.configure(state="disabled")
+        self._set_qr_status("Stopping scanner…")
+
+        def _stop() -> None:
+            self._qr_scanner.stop()
+
+            def _finalize() -> None:
+                if not self.winfo_exists():
+                    return
+                self._configure_qr_control(running=False)
+                if self._qr_status_var.get() == "Stopping scanner…":
+                    self._set_qr_status("Scanner idle")
+                if self._qr_preview_label is not None:
+                    self._qr_preview_label.configure(image=self._qr_preview_placeholder, text="Camera preview inactive")
+                self._qr_preview_image = None
+                self._qr_preview_busy = False
+                self._cancel_qr_border_reset()
+                self._qr_last_auto_record_payload = None
+                self._set_qr_preview_border(None)
+
+            self.after(0, _finalize)
+
+        threading.Thread(target=_stop, daemon=True).start()
+
+    def _attempt_auto_record(self, payload: str) -> None:
+        if not self._qr_auto_record_var.get():
+            return
+        if self._qr_last_auto_record_payload == payload:
+            return
+
+        success, message, tone, student_code, error_code = self._record_attendance_entry(source="qr-auto")
+
+        if success:
+            self._qr_last_auto_record_payload = payload
+            if student_code:
+                self._set_qr_status(f"Auto-recorded: {message.strip('Recorded ')} | {student_code}", tone="success")
+            self._set_manual_status(message, tone=tone)
+            return
+
+        if error_code == "duplicate":
+            self._qr_last_auto_record_payload = payload
+
+        if message:
+            self._set_qr_status(message, tone=tone)
+            self._set_manual_status(message, tone=tone)
+
+    def _handle_qr_payload(self, payload: str) -> None:
+        normalized = payload.strip()
+        if not normalized:
+            return
+
+        now = time.time()
+
+        if self._qr_last_payload == normalized and (now - self._qr_last_scan_time) < self._qr_debounce_seconds:
+            return
+
+        cleaned = normalized
+
+        name_value: Optional[str] = None
+        student_code: Optional[str] = None
+
+        if "|" in cleaned:
+            code_part, name_part = cleaned.split("|", 1)
+            name_value = name_part.strip() or None
+            student_code = code_part.strip() or None
+        else:
+            student_code = cleaned
+
+        if not student_code:
+            self._set_qr_status("QR code missing student ID.", tone="warning")
+            self._set_qr_preview_border(None)
+            return
+
+        self._qr_last_payload = cleaned
+        self._qr_last_scan_time = now
+
+        self.student_id_var.set(student_code)
+        self.student_name_var.set(name_value or "")
+
+        display_name = name_value or student_code
+        descriptor = f"{display_name} | {student_code}" if name_value else student_code
+        self._set_qr_status(
+            f"Last scanned: {descriptor}",
+            tone="success",
+        )
+        if self._qr_auto_record_var.get():
+            self._set_manual_status("Auto-record enabled. Logging attendance automatically.")
+        else:
+            self._set_manual_status("QR scan ready. Press Record to log attendance.")
+        self._set_qr_preview_border(self._qr_scan_border_color)
+        self._schedule_qr_border_reset(self._qr_scan_border_duration_ms)
+        self._attempt_auto_record(cleaned)
+
+    def _handle_qr_frame(self, frame: Any) -> None:
+        if not self.winfo_exists():
+            return
+        if self._qr_preview_label is None:
+            return
+        if self._qr_preview_busy:
+            return
+
+        self._qr_preview_busy = True
+        try:
+            if frame is None:
+                return
+
+            try:
+                import cv2  # type: ignore[import-not-found]
+            except ImportError:
+                return
+
+            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            pil_image = Image.fromarray(rgb_frame)
+            resample_source = getattr(Image, "Resampling", Image)
+            resample_filter = getattr(resample_source, "LANCZOS", getattr(resample_source, "BICUBIC", 2))
+            square_image = ImageOps.fit(
+                pil_image,
+                self._qr_preview_size,
+                method=resample_filter,
+                centering=(0.5, 0.5),
+            )
+            self._qr_preview_image = ctk.CTkImage(
+                light_image=square_image,
+                dark_image=square_image,
+                size=self._qr_preview_size,
+            )
+            self._qr_preview_label.configure(image=self._qr_preview_image, text="")
+        except Exception:
+            pass
+        finally:
+            self._qr_preview_busy = False
+
+    def _handle_qr_error(self, message: str) -> None:
+        self._set_qr_status(message, tone="warning")
+        self._configure_qr_control(running=False)
+        if self._qr_preview_label is not None:
+            self._qr_preview_label.configure(image=self._qr_preview_placeholder, text="Camera preview inactive")
+        self._qr_preview_image = None
+        self._qr_preview_busy = False
+        self._cancel_qr_border_reset()
+        self._set_qr_preview_border(None)
+
     # ------------------------------------------------------------------
     # Recent session list helpers
     # ------------------------------------------------------------------
@@ -1244,11 +1704,19 @@ class TakeAttendanceView(ctk.CTkFrame):
         for widget in self._recent_list.winfo_children():
             widget.destroy()
 
-        records = self._service.recent_attendance_records(limit=8)
-        if not records:
+        if not self._active_session_id:
             ctk.CTkLabel(self._recent_list, text="No attendance yet.", text_color=VS_TEXT_MUTED).pack(
                 anchor="w", padx=12, pady=6
             )
+            return
+
+        records = self._service.recent_attendance_for_session(self._active_session_id, limit=8)
+        if not records:
+            ctk.CTkLabel(
+                self._recent_list,
+                text="No attendance logged for this session yet.",
+                text_color=VS_TEXT_MUTED,
+            ).pack(anchor="w", padx=12, pady=6)
             return
 
         hide_ids = self._hide_student_id_var.get()
@@ -1551,6 +2019,10 @@ class TakeAttendanceView(ctk.CTkFrame):
         return "\n".join(lines)
 
     def destroy(self) -> None:  # pragma: no cover - lifecycle hook
+        try:
+            self._qr_scanner.stop()
+        except Exception:
+            pass
         if self._chrome_state_poll_job is not None:
             try:
                 self.after_cancel(self._chrome_state_poll_job)
@@ -1564,9 +2036,12 @@ class TemplateDialog(ctk.CTkToplevel):
     def __init__(self, master: TakeAttendanceView, service: AttendanceService) -> None:
         super().__init__(master)
         self.title("Create session template")
-        self.geometry("420x420")
         self.resizable(False, False)
         self.configure(fg_color=VS_BG)
+        self.transient(master)
+        self.grab_set()
+        self.geometry("640x560")
+        self.minsize(640, 560)
         self._service = service
         self._parent = master
 
@@ -1580,116 +2055,161 @@ class TemplateDialog(ctk.CTkToplevel):
         self._status_var = StringVar(value="")
 
         self._build_form()
+        self.after(10, self._center_on_parent)
 
     def _build_form(self) -> None:
-        frame = ctk.CTkFrame(self, fg_color=VS_SURFACE)
-        frame.pack(fill="both", expand=True, padx=20, pady=20)
-        frame.grid_columnconfigure(0, weight=1)
-        frame.grid_columnconfigure(1, weight=1)
-
-        label_font = ctk.CTkFont(size=16)
-
-        ctk.CTkLabel(frame, text="Campus", text_color=VS_TEXT, font=label_font).grid(
-            row=0, column=0, padx=12, pady=8, sticky="w"
+        container = ctk.CTkFrame(
+            self,
+            corner_radius=20,
+            fg_color=VS_SURFACE,
+            border_width=1,
+            border_color=VS_DIVIDER,
         )
+        container.pack(fill="both", expand=True, padx=28, pady=28)
+        container.grid_columnconfigure(0, weight=1)
+
+        title_font = ctk.CTkFont(size=24, weight="bold")
+        label_font = ctk.CTkFont(size=16, weight="bold")
+        body_font = ctk.CTkFont(size=16)
+
+        header = ctk.CTkFrame(container, fg_color="transparent")
+        header.grid(row=0, column=0, sticky="ew", padx=24, pady=(24, 12))
+        header.grid_columnconfigure(0, weight=1)
+
+        ctk.CTkLabel(
+            header,
+            text="Create session",
+            font=title_font,
+            text_color=VS_TEXT,
+        ).grid(row=0, column=0, sticky="w")
+
+        form = ctk.CTkFrame(container, fg_color=VS_SURFACE_ALT, corner_radius=16)
+        form.grid(row=1, column=0, padx=24, pady=(0, 20), sticky="ew")
+        form.grid_columnconfigure((0, 1), weight=1)
+
+        ctk.CTkLabel(form, text="Campus", font=label_font, text_color=VS_TEXT).grid(
+            row=0, column=0, padx=20, pady=(24, 6), sticky="w"
+        )
+        ctk.CTkLabel(form, text="Weekday", font=label_font, text_color=VS_TEXT).grid(
+            row=0, column=1, padx=20, pady=(24, 6), sticky="w"
+        )
+
         ctk.CTkOptionMenu(
-            frame,
+            form,
             values=list(CAMPUS_OPTIONS),
             variable=self.campus_var,
             fg_color=VS_BG,
             button_color=VS_ACCENT,
             button_hover_color=VS_ACCENT_HOVER,
             text_color=VS_TEXT,
-        ).grid(
-            row=0, column=1, padx=12, pady=8, sticky="ew"
-        )
+            font=body_font,
+            height=44,
+        ).grid(row=1, column=0, padx=20, pady=(0, 20), sticky="ew")
 
         weekday_labels = [label for label, _ in WEEKDAY_OPTIONS]
-        ctk.CTkLabel(frame, text="Weekday", text_color=VS_TEXT, font=label_font).grid(
-            row=1, column=0, padx=12, pady=8, sticky="w"
-        )
         ctk.CTkOptionMenu(
-            frame,
+            form,
             values=weekday_labels,
             variable=self.weekday_var,
             fg_color=VS_BG,
             button_color=VS_ACCENT,
             button_hover_color=VS_ACCENT_HOVER,
             text_color=VS_TEXT,
-        ).grid(
-            row=1, column=1, padx=12, pady=8, sticky="ew"
-        )
+            font=body_font,
+            height=44,
+        ).grid(row=1, column=1, padx=20, pady=(0, 20), sticky="ew")
 
-        ctk.CTkLabel(frame, text="Room number", text_color=VS_TEXT, font=label_font).grid(
-            row=2, column=0, padx=12, pady=8, sticky="w"
+        ctk.CTkLabel(form, text="Room number", font=label_font, text_color=VS_TEXT).grid(
+            row=2, column=0, columnspan=2, padx=20, pady=(0, 6), sticky="w"
         )
         ctk.CTkEntry(
-            frame,
+            form,
             textvariable=self.room_var,
             fg_color=VS_BG,
             border_color=VS_BORDER,
             text_color=VS_TEXT,
+            placeholder_text="Room 3306",
             placeholder_text_color=VS_TEXT_MUTED,
-        ).grid(row=2, column=1, padx=12, pady=8, sticky="ew")
+            font=body_font,
+            height=44,
+        ).grid(row=3, column=0, columnspan=2, padx=20, pady=(0, 20), sticky="ew")
 
-        ctk.CTkLabel(frame, text="Time from (hh)", text_color=VS_TEXT, font=label_font).grid(
-            row=3, column=0, padx=12, pady=8, sticky="w"
+        ctk.CTkLabel(form, text="Start (hh)", font=label_font, text_color=VS_TEXT).grid(
+            row=4, column=0, padx=20, pady=(0, 6), sticky="w"
         )
+        ctk.CTkLabel(form, text="End (hh)", font=label_font, text_color=VS_TEXT).grid(
+            row=4, column=1, padx=20, pady=(0, 6), sticky="w"
+        )
+
         ctk.CTkEntry(
-            frame,
+            form,
             textvariable=self.start_var,
             placeholder_text="12",
             fg_color=VS_BG,
             border_color=VS_BORDER,
             text_color=VS_TEXT,
             placeholder_text_color=VS_TEXT_MUTED,
-        ).grid(
-            row=3, column=1, padx=12, pady=8, sticky="ew"
-        )
+            font=body_font,
+            height=44,
+        ).grid(row=5, column=0, padx=20, pady=(0, 20), sticky="ew")
 
-        ctk.CTkLabel(frame, text="Time to (hh)", text_color=VS_TEXT, font=label_font).grid(
-            row=4, column=0, padx=12, pady=8, sticky="w"
-        )
         ctk.CTkEntry(
-            frame,
+            form,
             textvariable=self.end_var,
             placeholder_text="14",
             fg_color=VS_BG,
             border_color=VS_BORDER,
             text_color=VS_TEXT,
             placeholder_text_color=VS_TEXT_MUTED,
-        ).grid(
-            row=4, column=1, padx=12, pady=8, sticky="ew"
-        )
+            font=body_font,
+            height=44,
+        ).grid(row=5, column=1, padx=20, pady=(0, 20), sticky="ew")
 
-        ctk.CTkLabel(frame, textvariable=self._status_var, text_color=VS_TEXT_MUTED).grid(
-            row=5, column=0, columnspan=2, padx=12, pady=(4, 12), sticky="w"
-        )
+        ctk.CTkLabel(
+            form,
+            text="Create a class/session for your weekly attendance sessions.",
+            font=body_font,
+            text_color=VS_TEXT_MUTED,
+            justify="left",
+            wraplength=460,
+        ).grid(row=6, column=0, columnspan=2, padx=20, pady=(0, 24), sticky="w")
 
-        button_row = ctk.CTkFrame(frame, fg_color=VS_SURFACE)
-        button_row.grid(row=6, column=0, columnspan=2, padx=12, pady=(0, 4), sticky="ew")
+        self._status_label = ctk.CTkLabel(
+            container,
+            textvariable=self._status_var,
+            font=body_font,
+            text_color=VS_WARNING,
+        )
+        self._status_label.grid(row=2, column=0, padx=24, pady=(0, 8), sticky="w")
+
+        button_row = ctk.CTkFrame(container, fg_color="transparent")
+        button_row.grid(row=3, column=0, padx=24, pady=(0, 24), sticky="ew")
         button_row.grid_columnconfigure(0, weight=1)
         button_row.grid_columnconfigure(1, weight=1)
 
         ctk.CTkButton(
             button_row,
             text="Cancel",
+            height=44,
+            font=body_font,
             fg_color=VS_SURFACE_ALT,
             hover_color=VS_DIVIDER,
             text_color=VS_TEXT,
             command=self.destroy,
-        ).grid(row=0, column=0, padx=(0, 6), pady=4, sticky="ew")
+        ).grid(row=0, column=0, padx=(0, 10), sticky="ew")
 
         ctk.CTkButton(
             button_row,
-            text="Create",
+            text="Create session",
+            height=44,
+            font=ctk.CTkFont(size=17, weight="bold"),
             command=self._handle_create,
             fg_color=VS_ACCENT,
             hover_color=VS_ACCENT_HOVER,
             text_color=VS_TEXT,
-        ).grid(
-            row=0, column=1, padx=(6, 0), pady=4, sticky="ew"
-        )
+        ).grid(row=0, column=1, padx=(10, 0), sticky="ew")
+
+        container.grid_rowconfigure(4, weight=1)
 
     def _handle_create(self) -> None:
         campus = self.campus_var.get().strip()
@@ -1728,3 +2248,29 @@ class TemplateDialog(ctk.CTkToplevel):
 
         self._parent._load_templates()
         self.destroy()
+
+    def _center_on_parent(self) -> None:
+        try:
+            parent = self._parent.winfo_toplevel()
+        except Exception:
+            parent = None
+
+        self.update_idletasks()
+        width = self.winfo_width()
+        height = self.winfo_height()
+
+        if parent is not None and parent.winfo_exists():
+            parent.update_idletasks()
+            px = parent.winfo_rootx()
+            py = parent.winfo_rooty()
+            pwidth = parent.winfo_width()
+            pheight = parent.winfo_height()
+            x = px + max((pwidth - width) // 2, 0)
+            y = py + max((pheight - height) // 2, 0)
+        else:
+            screen_width = self.winfo_screenwidth()
+            screen_height = self.winfo_screenheight()
+            x = max((screen_width - width) // 2, 0)
+            y = max((screen_height - height) // 2, 0)
+
+        self.geometry(f"{width}x{height}+{x}+{y}")

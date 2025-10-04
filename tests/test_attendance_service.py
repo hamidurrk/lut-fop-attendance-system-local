@@ -33,9 +33,9 @@ def test_record_attendance_prevents_duplicates(tmp_path):
             (first_record_id,),
         ).fetchone()
 
-    assert row["a_point"] == 0
+    assert row["a_point"] == 5
     assert row["b_point"] == 0
-    assert row["t_point"] == 0
+    assert row["t_point"] == 5
     assert row["status"] == "recorded"
 
     with pytest.raises(DuplicateAttendanceError):

@@ -75,6 +75,6 @@ class SessionTemplate:
 
     def display_label(self) -> str:
         return (
-            f"{self.campus_name} · {self.room_code} · "
             f"{self.weekday_label()} {self.start_hour:02d}-{self.end_hour:02d}"
+            f" · {self.campus_name} · {self.room_code}"
         )

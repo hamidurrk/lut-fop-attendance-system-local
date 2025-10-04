@@ -80,7 +80,7 @@ class AttendanceService:
     ) -> int:
         student_identifier = student.student_code.strip()
         student_name = student.display_name if student.display_name != student.student_code else None
-        a_value = float(a_point) if a_point is not None else 0.0
+        a_value = float(a_point) if a_point is not None else 5.0
         b_value = float(b_point) if b_point is not None else 0.0
         total_value = float(t_point) if t_point is not None else a_value + b_value
         status_value = status.strip() if status else "recorded"
@@ -153,6 +153,30 @@ class AttendanceService:
                  LIMIT ?
                 """,
                 (limit,),
+            ).fetchall()
+
+        return [dict(row) for row in rows]
+
+    def recent_attendance_for_session(self, session_id: int, limit: int = 10) -> list[dict]:
+        with self._database.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT ar.id,
+                       ar.session_id,
+                       ar.student_id,
+                       ar.student_name,
+                       ar.recorded_at,
+                       ar.source,
+                       ar.a_point,
+                       ar.b_point,
+                       ar.t_point,
+                       ar.status
+                  FROM attendance_records AS ar
+                 WHERE ar.session_id = ?
+              ORDER BY datetime(ar.recorded_at) DESC, ar.id DESC
+                 LIMIT ?
+                """,
+                (session_id, limit),
             ).fetchall()
 
         return [dict(row) for row in rows]
