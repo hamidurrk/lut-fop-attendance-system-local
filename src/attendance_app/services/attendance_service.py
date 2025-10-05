@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import sqlite3
 
+from typing import Iterable
+
 from attendance_app.data import Database
 from attendance_app.models import AttendanceSession, BonusRecord, SessionTemplate, Student
 
@@ -73,16 +75,16 @@ class AttendanceService:
         student: Student,
         *,
         source: str = "manual",
-        a_point: float | None = None,
-        b_point: float | None = None,
-        t_point: float | None = None,
+        a_point: int | None = None,
+        b_point: int | None = None,
+        t_point: int | None = None,
         status: str = "recorded",
     ) -> int:
         student_identifier = student.student_code.strip()
         student_name = student.display_name if student.display_name != student.student_code else None
-        a_value = float(a_point) if a_point is not None else 5.0
-        b_value = float(b_point) if b_point is not None else 0.0
-        total_value = float(t_point) if t_point is not None else a_value + b_value
+        a_value = int(a_point) if a_point is not None else 5
+        b_value = int(b_point) if b_point is not None else 0
+        total_value = int(t_point) if t_point is not None else a_value + b_value
         status_value = status.strip() if status else "recorded"
 
         with self._database.connect() as connection:
@@ -113,6 +115,55 @@ class AttendanceService:
             )
             return int(cursor.lastrowid)
 
+    def list_sessions(
+        self,
+        *,
+        weekday_index: int | None = None,
+        start_hour: int | None = None,
+        end_hour: int | None = None,
+    ) -> list[dict]:
+        query_parts = [
+            "SELECT",
+            "    s.id,",
+            "    s.chapter_code,",
+            "    s.week_number,",
+            "    s.weekday_index,",
+            "    s.start_hour,",
+            "    s.end_hour,",
+            "    s.campus_name,",
+            "    s.room_code,",
+            "    s.created_at,",
+            "    s.status,",
+            "    COALESCE((SELECT COUNT(*) FROM attendance_records ar WHERE ar.session_id = s.id), 0) AS attendance_count,",
+            "    COALESCE((SELECT SUM(CASE WHEN ar.status = 'confirmed' THEN 1 ELSE 0 END) FROM attendance_records ar WHERE ar.session_id = s.id), 0) AS attendance_confirmed_count,",
+            "    COALESCE((SELECT COUNT(*) FROM bonus_records br WHERE br.session_id = s.id), 0) AS bonus_count,",
+            "    COALESCE((SELECT SUM(CASE WHEN br.status = 'confirmed' THEN 1 ELSE 0 END) FROM bonus_records br WHERE br.session_id = s.id), 0) AS bonus_confirmed_count",
+            "FROM attendance_sessions AS s",
+        ]
+
+        params: list[int] = []
+        conditions: list[str] = []
+
+        if weekday_index is not None:
+            conditions.append("s.weekday_index = ?")
+            params.append(weekday_index)
+
+        if start_hour is not None and end_hour is not None:
+            conditions.append("s.start_hour = ? AND s.end_hour = ?")
+            params.extend([start_hour, end_hour])
+
+        if conditions:
+            query_parts.append("WHERE " + " AND ".join(conditions))
+
+        query_parts.append("ORDER BY datetime(s.created_at) DESC, s.id DESC")
+
+        sql = "\n".join(query_parts)
+
+        with self._database.connect() as connection:
+            rows = connection.execute(sql, tuple(params)).fetchall()
+
+        return [dict(row) for row in rows]
+
     def recent_sessions(self, limit: int = 10) -> list[dict]:
         with self._database.connect() as connection:
             rows = connection.execute(
@@ -124,6 +175,28 @@ class AttendanceService:
                  LIMIT ?
                 """,
                 (limit,),
+            ).fetchall()
+            return [dict(row) for row in rows]
+
+    def get_session_attendance(self, session_id: int) -> list[dict]:
+        with self._database.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT id,
+                       student_id,
+                       student_name,
+                       source,
+                       a_point,
+                       b_point,
+                       t_point,
+                       status,
+                       recorded_at
+                  FROM attendance_records
+                 WHERE session_id = ?
+              ORDER BY LOWER(COALESCE(student_name, student_id)) ASC,
+                       student_id ASC
+                """,
+                (session_id,),
             ).fetchall()
             return [dict(row) for row in rows]
 
@@ -217,26 +290,166 @@ class AttendanceService:
                 (
                     bonus.session_id,
                     bonus.student_name.strip(),
-                    float(bonus.b_point),
+                    int(bonus.b_point),
                     cleaned_status,
                 ),
             )
             return int(cursor.lastrowid)
 
-    def list_bonus_for_session(self, session_id: int, limit: int = 20) -> list[dict]:
+    def list_bonus_for_session(self, session_id: int, limit: int | None = 20) -> list[dict]:
+        query = [
+            "SELECT id, student_name, b_point, status",
+            "  FROM bonus_records",
+            " WHERE session_id = ?",
+            " ORDER BY id DESC",
+        ]
+
+        params: list[int | None] = [session_id]
+        if limit is not None:
+            query.append(" LIMIT ?")
+            params.append(limit)
+
+        sql = "".join(query)
+
+        with self._database.connect() as connection:
+            rows = connection.execute(sql, tuple(params)).fetchall()
+
+        return [dict(row) for row in rows]
+
+    def get_session_bonus_summary(self, session_id: int) -> list[dict]:
         with self._database.connect() as connection:
             rows = connection.execute(
                 """
-                SELECT id, student_name, b_point, status
+                                SELECT COALESCE(student_name, '') AS student_name,
+                                             SUM(b_point) AS total_bonus,
+                                             SUM(CASE WHEN status = 'confirmed' THEN b_point ELSE 0 END) AS confirmed_bonus,
+                                             COUNT(*) AS record_count,
+                                             SUM(CASE WHEN status = 'confirmed' THEN 1 ELSE 0 END) AS confirmed_count
                   FROM bonus_records
                  WHERE session_id = ?
-              ORDER BY id DESC
-                 LIMIT ?
+                            GROUP BY COALESCE(student_name, '')
+                            ORDER BY LOWER(COALESCE(student_name, ''))
                 """,
-                (session_id, limit),
+                (session_id,),
             ).fetchall()
+            summary: list[dict] = []
+            for row in rows:
+                summary.append(
+                    {
+                        "student_name": row["student_name"],
+                        "total_bonus": int(row["total_bonus"] or 0),
+                        "confirmed_bonus": int(row["confirmed_bonus"] or 0),
+                        "record_count": int(row["record_count"] or 0),
+                        "confirmed_count": int(row["confirmed_count"] or 0),
+                    }
+                )
+            return summary
 
-        return [dict(row) for row in rows]
+    def update_attendance_records(
+        self,
+        *,
+        session_id: int,
+        updates: Iterable[dict],
+    ) -> None:
+        payloads = list(updates)
+        if not payloads:
+            return
+
+        with self._database.connect() as connection:
+            for payload in payloads:
+                record_id = int(payload["id"])
+                status = str(payload.get("status", "recorded") or "recorded").strip()
+                a_point = int(payload.get("a_point", 0) or 0)
+                b_point = int(payload.get("b_point", 0) or 0)
+                t_point_raw = payload.get("t_point")
+                t_point = int(t_point_raw) if t_point_raw is not None else a_point + b_point
+                student_name = payload.get("student_name")
+
+                connection.execute(
+                    """
+                    UPDATE attendance_records
+                       SET status = ?,
+                           a_point = ?,
+                           b_point = ?,
+                           t_point = ?,
+                           student_name = COALESCE(?, student_name)
+                     WHERE id = ?
+                       AND session_id = ?
+                    """,
+                    (
+                        status,
+                        a_point,
+                        b_point,
+                        t_point,
+                        student_name,
+                        record_id,
+                        session_id,
+                    ),
+                )
+
+    def update_bonus_status_for_session(
+        self,
+        *,
+        session_id: int,
+        record_ids: Iterable[int],
+        status: str,
+    ) -> None:
+        ids = [int(rid) for rid in record_ids]
+        if not ids:
+            return
+
+        placeholders = ", ".join(["?"] * len(ids))
+        query = (
+            "UPDATE bonus_records SET status = ? WHERE session_id = ? AND id IN ("
+            + placeholders
+            + ")"
+        )
+
+        with self._database.connect() as connection:
+            connection.execute(query, (status.strip(), session_id, *ids))
+
+    def update_session_status(self, session_id: int, status: str) -> None:
+        cleaned_status = status.strip() if status else "draft"
+        with self._database.connect() as connection:
+            connection.execute(
+                "UPDATE attendance_sessions SET status = ? WHERE id = ?",
+                (cleaned_status, session_id),
+            )
+
+    def confirm_attendance_for_session(self, session_id: int) -> bool:
+        """Mark all attendance records as confirmed and update session if applicable.
+
+        Returns True when the parent session status was updated to confirmed.
+        """
+        with self._database.connect() as connection:
+            connection.execute(
+                "UPDATE attendance_records SET status = 'confirmed' WHERE session_id = ?",
+                (session_id,),
+            )
+
+            total = connection.execute(
+                "SELECT COUNT(*) FROM attendance_records WHERE session_id = ?",
+                (session_id,),
+            ).fetchone()[0]
+
+            remaining = connection.execute(
+                """
+                SELECT COUNT(*)
+                  FROM attendance_records
+                 WHERE session_id = ?
+                   AND status <> 'confirmed'
+                """,
+                (session_id,),
+            ).fetchone()[0]
+
+            if int(total or 0) > 0 and int(remaining or 0) == 0:
+                connection.execute(
+                    "UPDATE attendance_sessions SET status = 'confirmed' WHERE id = ?",
+                    (session_id,),
+                )
+                return True
+
+        return False
 
     def create_session_template(
         self,

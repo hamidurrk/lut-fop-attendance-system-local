@@ -49,16 +49,16 @@ class AttendanceRecord:
     student_name: Optional[str] = None
     recorded_at: datetime = field(default_factory=datetime.utcnow)
     source: str = "manual"
-    a_point: float = 0.0
-    b_point: float = 0.0
-    t_point: float = 0.0
+    a_point: int = 0
+    b_point: int = 0
+    t_point: int = 0
     status: str = "recorded"
 
 @dataclass(slots=True)
 class BonusRecord:
     session_id: int
     student_name: str
-    b_point: float = 0.0
+    b_point: int = 0
     status: str = "pending"
 
 @dataclass(slots=True)

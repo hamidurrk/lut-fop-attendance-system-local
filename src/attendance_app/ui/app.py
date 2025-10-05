@@ -13,6 +13,7 @@ from attendance_app.ui.components.collapsible_nav import CollapsibleNav
 from attendance_app.ui.navigation import NAV_ITEMS
 from attendance_app.ui.placeholders import PlaceholderView
 from attendance_app.ui.take_attendance_view import TakeAttendanceView
+from attendance_app.ui.manage_records_view import ManageRecordsView
 from attendance_app.ui.theme import VS_BG
 
 
@@ -65,10 +66,9 @@ class AttendanceApp:
 
         self._views = {
             "take_attendance": take_attendance_view,
-            "history": PlaceholderView(
+            "history": ManageRecordsView(
                 self._content,
-                title="Attendance history",
-                message="Browse historical attendance records here soon.",
+                self._attendance_service,
             ),
             "auto_grader": PlaceholderView(
                 self._content,

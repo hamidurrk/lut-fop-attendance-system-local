@@ -1031,7 +1031,7 @@ class TakeAttendanceView(ctk.CTkFrame):
 
             point_label = ctk.CTkLabel(
                 card,
-                text=f"{record.get('b_point', 0):.1f} pts",
+                text=f"{int(record.get('b_point', 0) or 0)} pts",
                 font=point_font,
                 text_color=VS_ACCENT,
             )
@@ -1484,9 +1484,9 @@ class TakeAttendanceView(ctk.CTkFrame):
             return
 
         try:
-            bonus_value = float(bonus_value_raw)
+            bonus_value = int(bonus_value_raw)
         except ValueError:
-            self._set_bonus_status("Enter a valid number of bonus points.", tone="warning")
+            self._set_bonus_status("Enter a whole number of bonus points.", tone="warning")
             return
 
         bonus_record = BonusRecord(

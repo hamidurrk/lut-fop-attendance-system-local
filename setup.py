@@ -26,6 +26,7 @@ setup(
         "python-dotenv>=1.0.0",
         "requests>=2.31.0",
         "webdriver-manager>=4.0.0",
+        "openpyxl>=3.1.0",
     ],
     extras_require={
         "dev": [
