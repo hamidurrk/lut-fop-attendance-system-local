@@ -109,14 +109,12 @@ class ManageRecordsView(ctk.CTkFrame):
         self._detail_container.grid_remove()
 
     def _build_filters(self, parent: ctk.CTkFrame) -> None:
-        # Create a container frame with three columns to enable centering
         filter_container = ctk.CTkFrame(parent, fg_color="transparent")
         filter_container.grid(row=0, column=0, sticky="ew", padx=18, pady=(18, 12))
-        filter_container.grid_columnconfigure(0, weight=0)  # Left space
-        filter_container.grid_columnconfigure(1, weight=1)  # Center column (no expansion)
-        filter_container.grid_columnconfigure(2, weight=1)  # Right space
+        filter_container.grid_columnconfigure(0, weight=0)  
+        filter_container.grid_columnconfigure(1, weight=1)  
+        filter_container.grid_columnconfigure(2, weight=1)  
         
-        # Create the actual filters frame in the center column
         filters = ctk.CTkFrame(filter_container, fg_color=VS_SURFACE, corner_radius=14, 
                               border_width=1, border_color=VS_DIVIDER)
         filters.grid(row=0, column=0, padx=0, pady=0)

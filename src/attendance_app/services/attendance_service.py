@@ -136,6 +136,7 @@ class AttendanceService:
             "    s.status,",
             "    COALESCE((SELECT COUNT(*) FROM attendance_records ar WHERE ar.session_id = s.id), 0) AS attendance_count,",
             "    COALESCE((SELECT SUM(CASE WHEN ar.status = 'confirmed' THEN 1 ELSE 0 END) FROM attendance_records ar WHERE ar.session_id = s.id), 0) AS attendance_confirmed_count,",
+            "    COALESCE((SELECT SUM(CASE WHEN ar.status = 'graded' THEN 1 ELSE 0 END) FROM attendance_records ar WHERE ar.session_id = s.id), 0) AS graded_count,",
             "    COALESCE((SELECT COUNT(*) FROM bonus_records br WHERE br.session_id = s.id), 0) AS bonus_count,",
             "    COALESCE((SELECT SUM(CASE WHEN br.status = 'confirmed' THEN 1 ELSE 0 END) FROM bonus_records br WHERE br.session_id = s.id), 0) AS bonus_confirmed_count",
             "FROM attendance_sessions AS s",

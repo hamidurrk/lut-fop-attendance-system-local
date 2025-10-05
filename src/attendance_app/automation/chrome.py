@@ -39,6 +39,7 @@ class ChromeRemoteController:
     _binary_path: Optional[Path] = settings.chrome_binary_path
     _driver_path: Optional[Path] = settings.selenium_driver_path
     _driver: Optional[webdriver.Chrome] = field(init=False, default=None, repr=False)
+    _chrome_process: Optional[subprocess.Popen] = field(init=False, default=None, repr=False)
     _lock: threading.Lock = field(init=False, default_factory=threading.Lock, repr=False)
 
     def __post_init__(self) -> None:  # pragma: no cover - simple path preparation
@@ -65,6 +66,9 @@ class ChromeRemoteController:
     def _ensure_remote_browser(self) -> None:
         if self._is_port_open():
             return
+        if self._chrome_process is not None and self._chrome_process.poll() is not None:
+            self._chrome_process = None
+
         command = [
             str(self._binary_path),
             f"--remote-debugging-port={self._remote_port}",
@@ -88,9 +92,11 @@ class ChromeRemoteController:
             popen_kwargs["start_new_session"] = True
 
         try:
-            subprocess.Popen(command, **popen_kwargs)  # noqa: S603, S607 - launching trusted binary
+            process = subprocess.Popen(command, **popen_kwargs)  # noqa: S603, S607 - launching trusted binary
         except FileNotFoundError as exc:  # pragma: no cover - configuration issue
             raise ChromeAutomationError(f"Chrome binary not found: {self._binary_path}") from exc
+
+        self._chrome_process = process
 
         self._wait_for_port()
 
@@ -124,6 +130,32 @@ class ChromeRemoteController:
             ) from exc
         self._driver = driver
         return driver
+
+    def shutdown(self) -> None:
+        """Terminate the managed Chrome instance and any active WebDriver."""
+        with self._lock:
+            if self._driver is not None:
+                try:
+                    self._driver.quit()
+                except Exception:  # pragma: no cover - best effort cleanup
+                    pass
+                self._driver = None
+
+            if self._chrome_process is not None:
+                try:
+                    if self._chrome_process.poll() is None:
+                        self._chrome_process.terminate()
+                        try:
+                            self._chrome_process.wait(timeout=5)
+                        except subprocess.TimeoutExpired:
+                            self._chrome_process.kill()
+                except Exception:  # pragma: no cover - best effort cleanup
+                    pass
+                self._chrome_process = None
+
+            deadline = time.monotonic() + 5.0
+            while self._is_port_open() and time.monotonic() < deadline:
+                time.sleep(0.2)
 
     def _is_port_open(self) -> bool:
         try:

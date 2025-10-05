@@ -5,15 +5,21 @@ import json
 import os
 import re
 
-from attendance_app.automation import ChromeRemoteController, ChromeAutomationError, open_moodle_courses
+from attendance_app.automation import (
+    AutoGradingRoutine,
+    ChromeRemoteController,
+    ChromeAutomationError,
+    open_moodle_courses,
+    run_auto_grading,
+)
 from attendance_app.config.settings import settings
 from attendance_app.data import Database
 from attendance_app.services import AttendanceService
 from attendance_app.ui.components.collapsible_nav import CollapsibleNav
 from attendance_app.ui.navigation import NAV_ITEMS
-from attendance_app.ui.placeholders import PlaceholderView
 from attendance_app.ui.take_attendance_view import TakeAttendanceView
 from attendance_app.ui.manage_records_view import ManageRecordsView
+from attendance_app.ui.auto_grader_view import AutoGraderView
 from attendance_app.ui.theme import VS_BG
 
 
@@ -64,20 +70,27 @@ class AttendanceApp:
             on_session_ended=self._handle_session_ended,
         )
 
+        auto_grader_view = AutoGraderView(
+            self._content,
+            self._attendance_service,
+            chrome_controller=self._chrome_controller,
+            on_detail_open=self._handle_auto_grader_detail_open,
+            on_detail_close=self._handle_auto_grader_detail_close,
+        )
+
         self._views = {
             "take_attendance": take_attendance_view,
             "history": ManageRecordsView(
                 self._content,
                 self._attendance_service,
             ),
-            "auto_grader": PlaceholderView(
-                self._content,
-                title="Auto-grader",
-                message="Automate grading workflows from this tab in future iterations.",
-            ),
+            "auto_grader": auto_grader_view,
         }
 
+        self._auto_grader_view = auto_grader_view
+
         take_attendance_view.register_bonus_automation_handler(open_moodle_courses)
+        auto_grader_view.register_grading_handler(run_auto_grading)
 
         for view in self._views.values():
             view.grid(row=0, column=0, sticky="nsew")
@@ -99,7 +112,16 @@ class AttendanceApp:
         for name, view in self._views.items():
             view.grid_remove()
         if key in self._views:
-            self._views[key].grid()
+            view = self._views[key]
+            view.grid()
+            if key == "auto_grader":
+                self._auto_grader_view.refresh()
+            else:
+                self._handle_auto_grader_detail_close()
+
+    def register_auto_grading_handler(self, handler: AutoGradingRoutine | None) -> None:
+        """Allow external code to override the default automation routine."""
+        self._auto_grader_view.register_grading_handler(handler)
 
     def _handle_session_started(self) -> None:
         self._nav.collapse()
@@ -107,6 +129,13 @@ class AttendanceApp:
 
     def _handle_session_ended(self) -> None:
         self._nav.set_navigation_enabled(True)
+        self._nav.expand()
+        self._auto_grader_view.refresh()
+
+    def _handle_auto_grader_detail_open(self) -> None:
+        self._nav.collapse()
+
+    def _handle_auto_grader_detail_close(self) -> None:
         self._nav.expand()
 
     def _restore_window_position(self):

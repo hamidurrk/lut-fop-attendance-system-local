@@ -126,6 +126,7 @@ def test_list_sessions_and_updates(tmp_path):
     monday_summary = next(item for item in sessions if item["id"] == monday_id)
     assert monday_summary["attendance_count"] == 1
     assert monday_summary["attendance_confirmed_count"] == 1
+    assert monday_summary["graded_count"] == 0
     assert monday_summary["bonus_count"] == 1
     assert monday_summary["bonus_confirmed_count"] == 1
 
