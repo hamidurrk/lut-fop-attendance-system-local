@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+from datetime import datetime
 import threading
-from typing import Any, Callable
+from typing import Any, Callable, Iterable
 
 import customtkinter as ctk
 
 from attendance_app.automation import (
+    AutoGradingMessage,
     AutoGradingResult,
     AutoGradingSessionContext,
     ChromeAutomationError,
@@ -25,10 +27,16 @@ from attendance_app.ui.theme import (
     VS_TEXT,
     VS_TEXT_MUTED,
     VS_WARNING,
+    VS_INFO,
 )
 
-AutoGradingHandler = Callable[[ChromeRemoteController, str, str, int, bool, AutoGradingSessionContext], AutoGradingResult | bool]
+LOG_SUCCESS_COLOR = "#4ADE80"
+LOG_WARNING_COLOR = "#F87171"
+LOG_INFO_COLOR = "#60A5FA"
+LOG_NORMAL_COLOR = "#FFFFFF"
+LOG_TIMESTAMP_COLOR = "#FBBF24"
 
+AutoGradingHandler = Callable[[ChromeRemoteController, str, str, int, bool, AutoGradingSessionContext], AutoGradingResult | bool]
 
 class AutoGraderView(ctk.CTkFrame):
     """Browse confirmed sessions and run automated grading."""
@@ -63,6 +71,9 @@ class AutoGraderView(ctk.CTkFrame):
         self._automation_running = False
         self._stop_requested = False
         self._automation_thread: threading.Thread | None = None
+        self._automation_paused = False
+        self._pause_event = threading.Event()
+        self._pause_event.set()
         self._grading_handler: AutoGradingHandler | None = None
         self._current_processing_id: int | None = None
 
@@ -77,6 +88,11 @@ class AutoGraderView(ctk.CTkFrame):
         self._open_chrome_button: ctk.CTkButton | None = None
         self._emergency_button: ctk.CTkButton | None = None
         self._automation_status_label: ctk.CTkLabel | None = None
+        self._log_textbox: ctk.CTkTextbox | None = None
+        self._log_entries: list[dict[str, Any]] = []
+        self._log_entry_limit = 200
+        self._log_placeholder_visible = False
+        self._log_rendered_count = 0
         self._prompt_frame: ctk.CTkFrame | None = None
         self._prompt_label: ctk.CTkLabel | None = None
         self._prompt_yes_button: ctk.CTkButton | None = None
@@ -356,6 +372,7 @@ class AutoGraderView(ctk.CTkFrame):
         panel.grid_columnconfigure(1, weight=1)
         panel.grid_columnconfigure(2, weight=1)
         panel.grid_columnconfigure(3, weight=0)
+        panel.grid_rowconfigure(5, weight=1)
 
         title = ctk.CTkLabel(
             panel,
@@ -396,7 +413,7 @@ class AutoGraderView(ctk.CTkFrame):
         self._start_button = ctk.CTkButton(
             panel,
             text="Start auto-grading",
-            command=self._start_auto_grading,
+            command=self._handle_start_pause,
             fg_color=VS_ACCENT,
             hover_color=VS_ACCENT_HOVER,
             text_color=VS_TEXT,
@@ -425,6 +442,71 @@ class AutoGraderView(ctk.CTkFrame):
         )
         auto_save_switch.grid(row=0, column=1, sticky="w", padx=(12, 0))
 
+        log_title = ctk.CTkLabel(
+            panel,
+            text="Automation log",
+            font=ctk.CTkFont(size=14, weight="bold"),
+            text_color=VS_TEXT,
+            anchor="w",
+        )
+        log_title.grid(row=4, column=0, columnspan=4, sticky="w", padx=20, pady=(0, 6))
+
+        log_textbox = ctk.CTkTextbox(
+            panel,
+            height=200,
+            corner_radius=12,
+            border_width=1,
+            border_color=VS_DIVIDER,
+            fg_color=VS_SURFACE,
+            text_color=VS_TEXT,
+            wrap="word",
+            font=ctk.CTkFont(size=13),
+        )
+        log_textbox.grid(row=5, column=0, columnspan=4, sticky="nsew", padx=20, pady=(0, 16))
+        log_textbox.tag_config(
+            "log_info",
+            foreground=LOG_INFO_COLOR,
+            spacing1=4,
+            spacing3=6,
+            lmargin1=6,
+            lmargin2=6,
+            rmargin=6,
+        )
+        log_textbox.tag_config(
+            "log_success",
+            foreground=LOG_SUCCESS_COLOR,
+            spacing1=4,
+            spacing3=6,
+            lmargin1=6,
+            lmargin2=6,
+            rmargin=6,
+        )
+        log_textbox.tag_config(
+            "log_warning",
+            foreground=LOG_WARNING_COLOR,
+            spacing1=4,
+            spacing3=6,
+            lmargin1=6,
+            lmargin2=6,
+            rmargin=6,
+        )
+        log_textbox.tag_config(
+            "log_normal",
+            foreground=LOG_NORMAL_COLOR,
+            spacing1=4,
+            spacing3=6,
+            lmargin1=6,
+            lmargin2=6,
+            rmargin=6,
+        )
+        log_textbox.tag_config("log_timestamp", foreground=LOG_TIMESTAMP_COLOR)
+        log_textbox.tag_config("log_default", foreground=VS_TEXT)
+        log_textbox.tag_config("log_separator", foreground="#3E4A5C")
+        log_textbox.tag_config("log_placeholder", foreground=VS_TEXT)
+        # self._make_log_textbox_readonly(log_textbox)
+        self._log_textbox = log_textbox
+        self._render_log_entries(reset=True)
+
         status_title = ctk.CTkLabel(
             panel,
             text="Status",
@@ -432,7 +514,7 @@ class AutoGraderView(ctk.CTkFrame):
             text_color=VS_TEXT,
             anchor="w",
         )
-        status_title.grid(row=4, column=0, columnspan=4, sticky="w", padx=20, pady=(0, 6))
+        status_title.grid(row=6, column=0, columnspan=4, sticky="w", padx=20, pady=(0, 6))
 
         self._automation_status_label = ctk.CTkLabel(
             panel,
@@ -443,10 +525,10 @@ class AutoGraderView(ctk.CTkFrame):
             justify="left",
             wraplength=360,
         )
-        self._automation_status_label.grid(row=5, column=0, columnspan=4, sticky="ew", padx=20, pady=(0, 20))
+        self._automation_status_label.grid(row=7, column=0, columnspan=4, sticky="ew", padx=20, pady=(0, 20))
 
         prompt_frame = ctk.CTkFrame(panel, fg_color=VS_SURFACE_ALT, corner_radius=12)
-        prompt_frame.grid(row=6, column=0, columnspan=4, sticky="ew", padx=20, pady=(0, 20))
+        prompt_frame.grid(row=8, column=0, columnspan=4, sticky="ew", padx=20, pady=(0, 20))
         prompt_frame.grid_columnconfigure(0, weight=1)
         prompt_frame.grid_remove()
         self._prompt_frame = prompt_frame
@@ -844,6 +926,35 @@ class AutoGraderView(ctk.CTkFrame):
             self._open_chrome_button.configure(state="normal")
         self._update_controls_state()
 
+    def _handle_start_pause(self) -> None:
+        if not self._automation_running:
+            self._start_auto_grading()
+            return
+        if self._automation_paused:
+            self._resume_auto_grading()
+        else:
+            self._pause_auto_grading()
+
+    def _pause_auto_grading(self) -> None:
+        if not self._automation_running or self._automation_paused:
+            return
+        self._automation_paused = True
+        if self._pause_event is not None:
+            self._pause_event.clear()
+        self._set_status("Auto-grading paused. Press resume to continue.", tone="info")
+        self._append_log_messages([AutoGradingMessage("Auto-grading paused by user.", tone="info")])
+        self._update_controls_state()
+
+    def _resume_auto_grading(self) -> None:
+        if not self._automation_running or not self._automation_paused:
+            return
+        self._automation_paused = False
+        if self._pause_event is not None:
+            self._pause_event.set()
+        self._set_status("Auto-grading resumed.", tone="info")
+        self._append_log_messages([AutoGradingMessage("Auto-grading resumed.", tone="info")])
+        self._update_controls_state()
+
     def _start_auto_grading(self) -> None:
         if self._automation_running:
             return
@@ -858,16 +969,26 @@ class AutoGraderView(ctk.CTkFrame):
             return
 
         self._automation_running = True
+        self._automation_paused = False
         self._stop_requested = False
-        self._session_context = AutoGradingSessionContext(prompt_callback=self._prompt_user_confirmation)
+        self._pause_event = threading.Event()
+        self._pause_event.set()
+        self._session_context = AutoGradingSessionContext(
+            prompt_callback=self._prompt_user_confirmation,
+            log_callback=self._handle_streamed_log_message,
+        )
         self._resolve_prompt(False)
+        self._clear_log()
         self._update_controls_state()
         self._set_status("Preparing auto-grading…")
 
         session_id = int(self._selected_session["id"])
         records_snapshot = [record.copy() for record in self._attendance_records]
         auto_save = self._auto_save_var.get()
-        session_context = self._session_context or AutoGradingSessionContext(prompt_callback=self._prompt_user_confirmation)
+        session_context = self._session_context or AutoGradingSessionContext(
+            prompt_callback=self._prompt_user_confirmation,
+            log_callback=self._handle_streamed_log_message,
+        )
 
         def worker() -> None:
             controller = self._chrome_controller
@@ -891,6 +1012,12 @@ class AutoGraderView(ctk.CTkFrame):
                 if status == "graded":
                     continue
 
+                pause_event = self._pause_event
+                if pause_event is not None:
+                    pause_event.wait()
+                if self._stop_requested:
+                    break
+
                 self._mark_record_processing(record_id, True)
                 result = self._execute_grading_handler(record, auto_save, session_context)
                 self._mark_record_processing(record_id, False)
@@ -900,9 +1027,10 @@ class AutoGraderView(ctk.CTkFrame):
 
                 if result:
                     try:
-                        self._service.update_attendance_records(
+                        self._service.update_status_for_attendance_records(
                             session_id=session_id,
-                            updates=[{"id": record_id, "status": "graded"}],
+                            record_ids=[record_id],
+                            status="graded",
                         )
                     except Exception as exc:  # pragma: no cover - database layer should be reliable
                         self.after(0, lambda message=f"Failed to update record: {exc}": self._set_status(message, tone="warning"))
@@ -940,8 +1068,11 @@ class AutoGraderView(ctk.CTkFrame):
         student_id = record.get("student_id") or ""
         total_points = int(record.get("t_point", 0) or 0)
         context_obj = context or self._session_context or AutoGradingSessionContext(
-            prompt_callback=self._prompt_user_confirmation
+            prompt_callback=self._prompt_user_confirmation,
+            log_callback=self._handle_streamed_log_message,
         )
+        if context_obj.log_callback is None:
+            context_obj.log_callback = self._handle_streamed_log_message
         self._session_context = context_obj
         try:
             outcome = handler(controller, student_name, student_id, total_points, auto_save, context_obj)
@@ -951,22 +1082,50 @@ class AutoGraderView(ctk.CTkFrame):
         result = AutoGradingResult.ensure(outcome)
         if result.should_stop:
             self._stop_requested = True
+            if self._pause_event is not None:
+                self._pause_event.set()
         self.after(0, lambda res=result: self._handle_handler_feedback(res))
         return result.success
 
     def _handle_handler_feedback(self, result: AutoGradingResult) -> None:
-        messages = [msg.text for msg in result.messages if msg.text and msg.text.strip()]
+        handler_messages = list(result.messages)
+        messages = handler_messages[:]
         if result.should_stop:
-            messages.append("Auto-grader halted by automation routine.")
+            messages.append(
+                AutoGradingMessage(
+                    "Auto-grader halted by automation routine.",
+                    tone="warning",
+                )
+            )
         if not messages:
-            if result.success:
-                messages.append("Auto-grading step completed.")
-            else:
-                messages.append("Auto-grading step reported no changes.")
-        tone = result.dominant_tone() if result.messages else ("success" if result.success else "warning")
-        if result.should_stop and tone != "warning":
-            tone = "warning"
-        self._set_status("\n".join(messages), tone=tone)
+            default_text = "Auto-grading step completed." if result.success else "Auto-grading step reported no changes."
+            messages.append(AutoGradingMessage(default_text, tone="info" if result.success else "warning"))
+
+        should_stream = bool(self._session_context and self._session_context.log_callback)
+        if not should_stream:
+            self._append_log_messages(messages)
+        else:
+            extra_messages = messages[len(handler_messages) :]
+            if extra_messages:
+                self._append_log_messages(extra_messages)
+
+        tone = (
+            self._dominant_tone_from_entries(messages, default="success" if result.success else "warning")
+            if messages
+            else ("success" if result.success else "warning")
+        )
+        status_tone = "warning" if result.should_stop else tone
+
+        if result.should_stop:
+            status_message = "Auto-grader halted by automation routine."
+        elif status_tone == "warning":
+            status_message = "Auto-grading step reported an issue."
+        elif status_tone == "success":
+            status_message = "Auto-grading step completed successfully."
+        else:
+            status_message = "Auto-grading step updated."
+
+        self._set_status(status_message, tone=status_tone)
 
     def _mark_record_processing(self, record_id: int, processing: bool) -> None:
         self._current_processing_id = record_id if processing else None
@@ -1002,6 +1161,9 @@ class AutoGraderView(ctk.CTkFrame):
     def _handle_automation_launch_failure(self, message: str) -> None:
         self._automation_running = False
         self._stop_requested = False
+        self._automation_paused = False
+        if self._pause_event is not None:
+            self._pause_event.set()
         self._session_context = None
         self._resolve_prompt(False)
         self._update_controls_state()
@@ -1011,6 +1173,9 @@ class AutoGraderView(ctk.CTkFrame):
         self._automation_running = False
         self._session_context = None
         self._resolve_prompt(False)
+        self._automation_paused = False
+        if self._pause_event is not None:
+            self._pause_event.set()
         self._update_controls_state()
         if stopped:
             self._set_status("Auto-grading cancelled.", tone="warning")
@@ -1026,6 +1191,9 @@ class AutoGraderView(ctk.CTkFrame):
         if not self._automation_running and self._chrome_controller is None:
             return
         self._stop_requested = True
+        self._automation_paused = False
+        if self._pause_event is not None:
+            self._pause_event.set()
         self._set_status("Emergency stop requested.", tone="warning")
         self._resolve_prompt(False)
         if self._chrome_controller is not None:
@@ -1052,6 +1220,178 @@ class AutoGraderView(ctk.CTkFrame):
             self._update_summary()
             self._show_sessions_page(reset_status=True)
         self._update_controls_state()
+
+    # ------------------------------------------------------------------
+    # Automation log helpers
+    # ------------------------------------------------------------------
+    def _make_log_textbox_readonly(self, textbox: ctk.CTkTextbox) -> None:
+        allowed_navigation = {
+            "Left",
+            "Right",
+            "Up",
+            "Down",
+            "Home",
+            "End",
+            "Prior",
+            "Next",
+        }
+
+        def handle_key(event: Any) -> str | None:
+            keysym = getattr(event, "keysym", "")
+            if not keysym:
+                return None
+            if keysym in {"Shift_L", "Shift_R", "Control_L", "Control_R"}:
+                return None
+            if keysym in allowed_navigation:
+                return None
+            if keysym == "Tab":
+                next_widget = textbox.tk_focusNext()
+                if next_widget is not None:
+                    next_widget.focus()
+                return "break"
+
+            ctrl_pressed = bool(getattr(event, "state", 0) & 0x4)
+            lower_key = keysym.lower()
+            if ctrl_pressed and lower_key == "c":
+                return None
+            if ctrl_pressed and lower_key == "a":
+                textbox.tag_add("sel", "1.0", "end")
+                return "break"
+
+            return "break"
+
+        def block_edit(event: Any) -> str:
+            return "break"
+
+        textbox.bind("<KeyPress>", handle_key)
+        textbox.bind("<<Paste>>", block_edit)
+        textbox.bind("<<Cut>>", block_edit)
+        textbox.bind("<<Clear>>", block_edit)
+        textbox.bind("<Delete>", block_edit)
+        textbox.bind("<BackSpace>", block_edit)
+        textbox.bind("<KeyRelease>", lambda _event: None)
+
+    def _handle_streamed_log_message(self, message: AutoGradingMessage | None) -> None:
+        if message is None or not isinstance(message, AutoGradingMessage):
+            return
+
+        try:
+            self.after(0, lambda msg=message: self._append_log_messages([msg]))
+        except Exception:  # pragma: no cover - widget may be disposed
+            pass
+
+    def _append_log_messages(self, messages: Iterable[AutoGradingMessage]) -> None:
+        new_entries: list[dict[str, Any]] = []
+        for message in messages:
+            if message is None or not isinstance(message, AutoGradingMessage):
+                continue
+            text = (message.text or "").strip()
+            if not text:
+                continue
+            tone = message.normalized_tone()
+            entry = {
+                "text": text,
+                "tone": tone,
+                "timestamp": datetime.now(),
+            }
+            self._log_entries.append(entry)
+            new_entries.append(entry)
+
+        if not new_entries:
+            return
+
+        overflow = len(self._log_entries) - self._log_entry_limit
+        if overflow > 0:
+            del self._log_entries[:overflow]
+
+        self._render_log_entries(reset=True)
+
+    def _render_log_entries(
+        self,
+        new_entries: Iterable[dict[str, Any]] | None = None,
+        *,
+        reset: bool = False,
+    ) -> None:
+        textbox = self._log_textbox
+        if textbox is None:
+            return
+
+        if reset:
+            entries = list(reversed(self._log_entries))
+        else:
+            entries = list(new_entries or [])
+            entries.reverse()
+
+        if reset:
+            textbox.delete("1.0", "end")
+            self._log_placeholder_visible = False
+            self._log_rendered_count = 0
+
+        if not entries:
+            if reset:
+                self._show_log_placeholder(textbox)
+            return
+
+        if self._log_placeholder_visible:
+            textbox.delete("1.0", "end")
+            self._log_placeholder_visible = False
+            self._log_rendered_count = 0
+
+        for entry in entries:
+            self._write_log_entry(entry, textbox)
+
+        textbox.see("1.0")
+
+    def _write_log_entry(self, entry: dict[str, Any], textbox: ctk.CTkTextbox) -> None:
+        if self._log_rendered_count > 0:
+            textbox.insert("end", "\n", ("log_default",))
+            textbox.insert("end", "─" * 15, ("log_separator",))
+            textbox.insert("end", "\n", ("log_default",))
+
+        tone = entry.get("tone", "info") or "info"
+
+        timestamp_obj = entry.get("timestamp")
+        if isinstance(timestamp_obj, datetime):
+            timestamp = timestamp_obj.strftime("%H:%M:%S")
+        else:
+            timestamp = datetime.now().strftime("%H:%M:%S")
+
+        # Add timestamp with precise boundaries
+        header_text = f"[{timestamp}] "
+        textbox.insert("end", header_text, ("log_timestamp",))
+
+        # Add message body with precise boundaries
+        body_text = entry.get("text", "")
+        formatted_body = body_text.replace("\n", "\n   ")
+        if formatted_body:
+            textbox.insert("end", formatted_body, (f"log_{tone}",))
+
+        textbox.insert("end", "\n", ("log_default",))
+
+        self._log_rendered_count += 1
+
+    def _show_log_placeholder(self, textbox: ctk.CTkTextbox) -> None:
+        textbox.delete("1.0", "end")
+        placeholder_text = "Log messages will appear here once auto-grading starts."
+        textbox.insert("1.0", placeholder_text, ("log_placeholder",))
+        textbox.tag_add("log_placeholder", "1.0", "end")
+        self._log_placeholder_visible = True
+        self._log_rendered_count = 0
+
+    def _clear_log(self) -> None:
+        self._log_entries.clear()
+        self._render_log_entries(reset=True)
+
+    def _dominant_tone_from_entries(self, messages: Iterable[AutoGradingMessage], *, default: str = "info") -> str:
+        priority = {"warning": 3, "success": 2, "info": 1, "normal": 0}
+        chosen = default
+        for message in messages:
+            if not isinstance(message, AutoGradingMessage):
+                continue
+            tone = message.normalized_tone()
+            if priority.get(tone, 0) > priority.get(chosen, 0):
+                chosen = tone
+        return chosen
 
     # ------------------------------------------------------------------
     # Confirmation prompt helpers
@@ -1117,6 +1457,7 @@ class AutoGraderView(ctk.CTkFrame):
             "info": VS_TEXT_MUTED,
             "warning": VS_WARNING,
             "success": VS_SUCCESS,
+            "normal": VS_TEXT,
         }
         new_color = color_map.get(tone, VS_TEXT_MUTED)
         self._status_color = new_color
@@ -1127,9 +1468,16 @@ class AutoGraderView(ctk.CTkFrame):
 
     def _update_controls_state(self) -> None:
         session_selected = self._selected_session is not None
-        can_start = session_selected and not self._automation_running and bool(self._grading_handler)
+        handler_available = bool(self._grading_handler)
+        can_start = session_selected and handler_available
         if self._start_button is not None:
-            self._start_button.configure(state="normal" if can_start else "disabled")
+            if not self._automation_running:
+                text = "Start auto-grading"
+                state = "normal" if can_start else "disabled"
+            else:
+                text = "Resume auto-grading" if self._automation_paused else "Pause auto-grading"
+                state = "normal"
+            self._start_button.configure(state=state, text=text)
         if self._open_chrome_button is not None:
             self._open_chrome_button.configure(state="normal" if not self._automation_running else "disabled")
         if self._emergency_button is not None:

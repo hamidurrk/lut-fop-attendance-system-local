@@ -388,6 +388,27 @@ class AttendanceService:
                     ),
                 )
 
+    def update_status_for_attendance_records(
+        self,
+        *,
+        session_id: int,
+        record_ids: Iterable[int],
+        status: str,
+    ) -> None:
+        ids = [int(rid) for rid in record_ids]
+        if not ids:
+            return
+
+        placeholders = ", ".join(["?"] * len(ids))
+        query = (
+            "UPDATE attendance_records SET status = ? WHERE session_id = ? AND id IN ("
+            + placeholders
+            + ")"
+        )
+
+        with self._database.connect() as connection:
+            connection.execute(query, (status.strip(), session_id, *ids))
+
     def update_bonus_status_for_session(
         self,
         *,
