@@ -387,7 +387,7 @@ class AutoGraderView(ctk.CTkFrame):
             panel,
             text=(
                 "Launch Chrome and start the auto-grader. Each student will run through the registered"
-                " Selenium workflow sequentially."
+                " workflow sequentially."
             ),
             font=ctk.CTkFont(size=13),
             text_color=VS_TEXT_MUTED,
@@ -629,7 +629,7 @@ class AutoGraderView(ctk.CTkFrame):
 
             chapter = session.get("chapter_code") or "—"
             week_number = session.get("week_number")
-            week = f"W{week_number}" if week_number is not None else "—"
+            week = f"{week_number}" if week_number is not None else "—"
             weekday_label = day_lookup.get(session.get("weekday_index"), "Day ?")
             start_hour = session.get("start_hour")
             end_hour = session.get("end_hour")
@@ -800,10 +800,10 @@ class AutoGraderView(ctk.CTkFrame):
                 border_color=VS_DIVIDER,
             )
             row_frame.grid(row=index, column=0, sticky="ew", padx=12, pady=4)
-            row_frame.grid_columnconfigure(0, weight=2)
-            row_frame.grid_columnconfigure(1, weight=1)
-            row_frame.grid_columnconfigure(2, weight=1)
-            row_frame.grid_columnconfigure(3, weight=1)
+            row_frame.grid_columnconfigure(0, weight=2, uniform="attendance_cols")
+            row_frame.grid_columnconfigure(1, weight=1, uniform="attendance_cols")
+            row_frame.grid_columnconfigure(2, weight=1, uniform="attendance_cols")
+            row_frame.grid_columnconfigure(3, weight=1, uniform="attendance_cols")
 
             student_name = record.get("student_name") or record.get("student_id") or "Unknown"
             student_id = record.get("student_id") or "—"
@@ -872,8 +872,8 @@ class AutoGraderView(ctk.CTkFrame):
             time_range = f"{int(start_hour):02d}:00-{int(end_hour):02d}:00"
 
         if self._session_title is not None:
-            self._session_title.configure(text=f"Session · {chapter} · W{week}")
-        self._summary_var.set(f"{weekday_label} · {time_range} · {len(self._attendance_records)} students")
+            self._session_title.configure(text=f"{weekday_label} {time_range} · C{chapter} · W{week}")
+        self._summary_var.set(f"Chapter {chapter} · Week {week} · {len(self._attendance_records)} students")
 
     # ------------------------------------------------------------------
     # Automation actions

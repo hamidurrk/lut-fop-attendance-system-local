@@ -57,7 +57,7 @@ class TakeAttendanceView(ctk.CTkFrame):
         self._on_session_started = on_session_started
         self._on_session_ended = on_session_ended
 
-        self._status_var = StringVar(value="Choose a session template to get started.")
+        self._status_var = StringVar(value="Choose a session to get started.")
         self._session_info_var = StringVar(value="")
         self._qr_status_var = StringVar(value="Scanner idle")
         self._manual_status_var = StringVar(value="")
@@ -441,7 +441,7 @@ class TakeAttendanceView(ctk.CTkFrame):
         form_card.grid(row=2, column=0, padx=32, pady=(0, 16), sticky="ew")
         form_card.grid_columnconfigure((0, 1), weight=1)
 
-        ctk.CTkLabel(form_card, text="Chapter code", font=label_font, text_color=VS_TEXT).grid(
+        ctk.CTkLabel(form_card, text="Chapter", font=label_font, text_color=VS_TEXT).grid(
             row=0, column=0, padx=24, pady=(20, 6), sticky="w"
         )
         chapter_entry = ctk.CTkEntry(
@@ -450,7 +450,7 @@ class TakeAttendanceView(ctk.CTkFrame):
             fg_color=VS_BG,
             border_color=VS_BORDER,
             text_color=VS_TEXT,
-            placeholder_text="e.g. CS-A1110",
+            placeholder_text="e.g. 6",
             placeholder_text_color=VS_TEXT_MUTED,
             font=body_font,
             height=42,
@@ -476,7 +476,7 @@ class TakeAttendanceView(ctk.CTkFrame):
 
         ctk.CTkLabel(
             form_card,
-            text="Select a template and confirm the chapter/week to open a new attendance session.",
+            text="Select a session and confirm the chapter/week to open a new attendance session.",
             font=hint_font,
             text_color=VS_TEXT_MUTED,
             justify="left",
@@ -1083,7 +1083,7 @@ class TakeAttendanceView(ctk.CTkFrame):
         week_value = self.week_var.get()
 
         if template_id <= 0:
-            self._update_status_message("Select a session template first.", tone="warning")
+            self._update_status_message("Select a session first.", tone="warning")
             return
 
         if not chapter or not week_value:
@@ -1092,7 +1092,7 @@ class TakeAttendanceView(ctk.CTkFrame):
 
         template = self._service.get_session_template(template_id)
         if not template:
-            self._update_status_message("Template not found. Create a new one.", tone="warning")
+            self._update_status_message("Session not found. Create a new one.", tone="warning")
             return
 
         session = AttendanceSession(
@@ -2035,7 +2035,7 @@ class TakeAttendanceView(ctk.CTkFrame):
 class TemplateDialog(ctk.CTkToplevel):
     def __init__(self, master: TakeAttendanceView, service: AttendanceService) -> None:
         super().__init__(master)
-        self.title("Create session template")
+        self.title("Create session")
         self.resizable(False, False)
         self.configure(fg_color=VS_BG)
         self.transient(master)

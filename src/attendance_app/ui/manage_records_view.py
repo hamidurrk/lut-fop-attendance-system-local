@@ -273,7 +273,7 @@ class ManageRecordsView(ctk.CTkFrame):
 
         back_button = ctk.CTkButton(
             top_bar,
-            text="Back",
+            text="◀ Back",
             command=self._show_list_view,
             width=110,
             height=46,
@@ -854,17 +854,15 @@ class ManageRecordsView(ctk.CTkFrame):
 
         if chapter:
             if week_number is not None:
-                title_text = f"{chapter_display} — Week {week_number}"
+                title_text = f"{weekday_label} · {time_display} · C{chapter_display} · W{week_number}"
             else:
-                title_text = chapter_display
+                title_text = f"{weekday_label} · {time_display} · C{chapter_display}"
         else:
             title_text = "Session details"
 
         metadata_parts = [
             f"Chapter {chapter_display}",
             week_display,
-            weekday_label,
-            time_display,
             campus_display,
         ]
         metadata_text = " · ".join(metadata_parts)
