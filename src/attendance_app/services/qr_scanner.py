@@ -103,6 +103,11 @@ class QRScanner:
                     time.sleep(SCAN_INTERVAL_SECONDS)
                     continue
 
+                try:
+                    frame = cv2_module.flip(frame, 1)
+                except Exception:
+                    pass
+
                 now = time.time()
 
                 if on_frame and (now - last_preview) >= PREVIEW_INTERVAL_SECONDS:

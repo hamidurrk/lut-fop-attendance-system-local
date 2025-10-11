@@ -32,6 +32,7 @@ from attendance_app.ui.theme import (
     VS_TEXT_MUTED,
     VS_WARNING,
 )
+from attendance_app.ui.utils import play_scanner_beep_async
 from attendance_app.utils import InvalidHourRange, WEEKDAY_OPTIONS, format_relative_time, parse_hour_range
 from attendance_app.config.settings import settings, user_settings_store
 
@@ -1586,6 +1587,7 @@ class TakeAttendanceView(ctk.CTkFrame):
             if student_code:
                 self._set_qr_status(f"Auto-recorded: {message.strip('Recorded ')} | {student_code}", tone="success")
             self._set_manual_status(message, tone=tone)
+            play_scanner_beep_async()
             return
 
         if error_code == "duplicate":
