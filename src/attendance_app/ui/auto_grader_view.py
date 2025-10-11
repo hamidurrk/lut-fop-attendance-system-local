@@ -15,6 +15,7 @@ from attendance_app.automation import (
 )
 from attendance_app.models.attendance import WEEKDAY_LABELS
 from attendance_app.services import AttendanceService
+from attendance_app.ui.utils import load_icon_image
 from attendance_app.ui.theme import (
     VS_ACCENT,
     VS_ACCENT_HOVER,
@@ -66,6 +67,7 @@ class AutoGraderView(ctk.CTkFrame):
         self._summary_var = ctk.StringVar(value="")
         self._status_var = ctk.StringVar(value="Select a session to begin auto-grading.")
         self._status_color = VS_TEXT_MUTED
+        self._back_icon_image, self._back_icon = load_icon_image("back.png", (18, 18))
 
         self._auto_save_var = ctk.BooleanVar(value=True)
         self._automation_running = False
@@ -263,9 +265,12 @@ class AutoGraderView(ctk.CTkFrame):
         top_bar.grid_columnconfigure(1, weight=1)
         top_bar.grid_columnconfigure(2, weight=0)
 
+        back_text = "Sessions" if self._back_icon is not None else "◀ Sessions"
         self._back_button = ctk.CTkButton(
             top_bar,
-            text="◀ Sessions",
+            text=back_text,
+            image=self._back_icon,
+            compound="left" if self._back_icon is not None else "center",
             command=self._handle_back_to_sessions,
             fg_color=VS_SURFACE,
             hover_color=VS_ACCENT,
@@ -273,8 +278,9 @@ class AutoGraderView(ctk.CTkFrame):
             border_width=1,
             border_color=VS_DIVIDER,
             height=40,
-            width=130,
+            width=140,
             font=ctk.CTkFont(size=14, weight="bold"),
+            anchor="w",
         )
         self._back_button.grid(row=0, column=0, sticky="w", padx=(0, 16), pady=(0, 12))
 
@@ -887,6 +893,19 @@ class AutoGraderView(ctk.CTkFrame):
             self._set_status("Automation handler ready. Select a session to begin.")
         self._update_controls_state()
 
+    def set_chrome_controller(self, controller: ChromeRemoteController | None) -> None:
+        if self._chrome_controller is controller:
+            return
+
+        self._chrome_controller = controller
+        if controller is None and not self._automation_running:
+            self._set_status(
+                "Chrome automation is not configured. Update the Chrome path under Settings to enable auto-grading.",
+                tone="warning",
+            )
+
+        self._update_controls_state()
+
     def _handle_open_chrome(self) -> None:
         if self._chrome_controller is None:
             self._set_status("Chrome automation is not configured.", tone="warning")
@@ -1469,7 +1488,8 @@ class AutoGraderView(ctk.CTkFrame):
     def _update_controls_state(self) -> None:
         session_selected = self._selected_session is not None
         handler_available = bool(self._grading_handler)
-        can_start = session_selected and handler_available
+        controller_available = self._chrome_controller is not None
+        can_start = session_selected and handler_available and controller_available
         if self._start_button is not None:
             if not self._automation_running:
                 text = "Start auto-grading"
@@ -1479,7 +1499,10 @@ class AutoGraderView(ctk.CTkFrame):
                 state = "normal"
             self._start_button.configure(state=state, text=text)
         if self._open_chrome_button is not None:
-            self._open_chrome_button.configure(state="normal" if not self._automation_running else "disabled")
+            if self._automation_running or not controller_available:
+                self._open_chrome_button.configure(state="disabled")
+            else:
+                self._open_chrome_button.configure(state="normal")
         if self._emergency_button is not None:
             self._emergency_button.configure(state="normal" if self._automation_running else "disabled")
         if self._back_button is not None:

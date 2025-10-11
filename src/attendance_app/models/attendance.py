@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
+from datetime import timezone
 from typing import Optional
 
 WEEKDAY_LABELS = {
@@ -34,7 +35,7 @@ class AttendanceSession:
     end_hour: int
     campus_name: str
     room_code: str
-    created_at: datetime = datetime.utcnow()
+    created_at: datetime = datetime.now(timezone.utc)
 
     def session_key(self) -> str:
         return (
@@ -47,7 +48,7 @@ class AttendanceRecord:
     session_id: int
     student_code: str
     student_name: Optional[str] = None
-    recorded_at: datetime = field(default_factory=datetime.utcnow)
+    recorded_at: datetime = field(default_factory=datetime.now(timezone.utc))
     source: str = "manual"
     a_point: int = 0
     b_point: int = 0

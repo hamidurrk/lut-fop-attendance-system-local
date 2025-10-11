@@ -33,7 +33,7 @@ from attendance_app.ui.theme import (
     VS_WARNING,
 )
 from attendance_app.utils import InvalidHourRange, WEEKDAY_OPTIONS, format_relative_time, parse_hour_range
-from attendance_app.config.settings import settings
+from attendance_app.config.settings import settings, user_settings_store
 
 CAMPUS_OPTIONS: tuple[str, ...] = ("Lappeenranta", "Lahti")
 
@@ -167,6 +167,26 @@ class TakeAttendanceView(ctk.CTkFrame):
             self._bonus_output_var.set(
                 f"Registered bonus automation workflows: {handler_names}" if handler_names else default_message
             )
+
+    def set_chrome_controller(self, controller: ChromeRemoteController | None) -> None:
+        if self._chrome_controller is controller:
+            return
+
+        self._chrome_controller = controller
+        self._bonus_fetch_in_progress = False
+
+        if controller is None:
+            self._bonus_instruction_var.set(self._bonus_instruction_launch)
+            self._bonus_output_var.set(self._chrome_inactive_message)
+
+        self._update_chrome_ui_state(chrome_active=False)
+        if self._chrome_state_poll_job is None:
+            self._schedule_chrome_state_poll()
+
+    def refresh_user_preferences(self) -> None:
+        default_bonus = user_settings_store.get("default_bonus_points", settings.default_bonus_points)
+        if default_bonus not in (None, "") and not self.bonus_point_var.get().strip():
+            self.bonus_point_var.set(str(default_bonus))
 
     # ------------------------------------------------------------------
     # Status helpers
@@ -1333,7 +1353,7 @@ class TakeAttendanceView(ctk.CTkFrame):
                 if isinstance(student_name_value, str) and student_name_value.strip():
                     normalized = student_name_value.strip()
                     self.bonus_student_name_var.set(normalized)
-                default_points = getattr(settings, "default_bonus_points", "")
+                default_points = user_settings_store.get("default_bonus_points", settings.default_bonus_points)
                 if default_points not in (None, ""):
                     self.bonus_point_var.set(str(default_points))
 

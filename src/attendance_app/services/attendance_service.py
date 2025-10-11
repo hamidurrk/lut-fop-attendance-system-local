@@ -6,7 +6,7 @@ from typing import Iterable
 
 from attendance_app.data import Database
 from attendance_app.models import AttendanceSession, BonusRecord, SessionTemplate, Student
-
+from attendance_app.config.settings import settings, user_settings_store
 
 class DuplicateSessionError(RuntimeError):
     """Raised when attempting to create a duplicate attendance session."""
@@ -82,8 +82,16 @@ class AttendanceService:
     ) -> int:
         student_identifier = student.student_code.strip()
         student_name = student.display_name if student.display_name != student.student_code else None
-        a_value = int(a_point) if a_point is not None else 5
-        b_value = int(b_point) if b_point is not None else 0
+        default_attendance = int(
+            user_settings_store.get("default_attendance_points", settings.default_attendance_points)
+        )
+        default_bonus = int(user_settings_store.get("default_bonus_points", settings.default_bonus_points))
+
+        a_value = int(a_point) if a_point is not None else default_attendance
+        if b_point is not None:
+            b_value = int(b_point)
+        else:
+            b_value = default_bonus if source == "bonus" else 0
         total_value = int(t_point) if t_point is not None else a_value + b_value
         status_value = status.strip() if status else "recorded"
 

@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Callable, Iterable
 
 import customtkinter as ctk
+from PIL import Image
 
 from attendance_app.ui.theme import (
     VS_ACCENT,
@@ -14,6 +15,10 @@ from attendance_app.ui.theme import (
     VS_TEXT,
     VS_TEXT_MUTED,
 )
+from attendance_app.ui.utils import load_icon_image
+
+ICON_SIZE: tuple[int, int] = (32, 32)
+BUTTON_HEIGHT = ICON_SIZE[1] + 18
 
 
 @dataclass(frozen=True)
@@ -21,6 +26,7 @@ class NavigationItem:
     key: str
     label: str
     icon_text: str | None = None
+    icon_filename: str | None = None
 
 
 class CollapsibleNav(ctk.CTkFrame):
@@ -44,15 +50,13 @@ class CollapsibleNav(ctk.CTkFrame):
         self._on_select = on_select
         self._is_collapsed = False
         self._expanded_width = width
-        self._collapsed_width = 72
+        self._collapsed_width = max(ICON_SIZE[0] + 44, 84)
         self._enabled = True
+        self._button_icons: dict[str, tuple[Image.Image | None, ctk.CTkImage | None]] = {}
 
         self.grid_columnconfigure(0, weight=1)
         self.grid_propagate(False)
         self.configure(width=self._expanded_width)
-
-        self.grid_rowconfigure(tuple(range(len(self._items) + 2)), weight=0)
-        self.grid_rowconfigure(len(self._items) + 2, weight=1)
 
         toggle_font = ctk.CTkFont(size=20, weight="bold")
         self._toggle_button = ctk.CTkButton(
@@ -71,27 +75,72 @@ class CollapsibleNav(ctk.CTkFrame):
         )
         self._toggle_button.grid(row=0, column=0, padx=8, pady=(12, 6), sticky="ew")
 
+        for item in self._items:
+            if item.icon_filename:
+                self._button_icons[item.key] = load_icon_image(item.icon_filename, ICON_SIZE)
+            else:
+                self._button_icons[item.key] = (None, None)
+
         self._buttons: dict[str, ctk.CTkButton] = {}
         button_font = ctk.CTkFont(size=16, weight="bold")
-        for index, item in enumerate(self._items, start=1):
+
+        top_items = [item for item in self._items if item.key != "settings"]
+        bottom_items = [item for item in self._items if item.key == "settings"]
+
+        row_index = 1
+        for item in top_items:
+            _, icon_image = self._button_icons.get(item.key, (None, None))
             button = ctk.CTkButton(
                 self,
                 text=item.label,
                 width=self._expanded_width - 24,
                 anchor="w",
                 command=lambda k=item.key: self._handle_select(k),
-                height=36,
+                height=BUTTON_HEIGHT,
                 fg_color=VS_SIDEBAR,
                 hover_color=VS_SURFACE_ALT,
                 text_color=VS_TEXT,
                 font=button_font,
                 border_width=1,
                 border_color=VS_BORDER,
+                image=icon_image,
+                compound="left" if icon_image is not None else "center",
             )
-            button.grid(row=index, column=0, padx=12, pady=4, sticky="ew")
+            button.grid(row=row_index, column=0, padx=12, pady=4, sticky="ew")
             self._buttons[item.key] = button
+            row_index += 1
+
+        spacer_row = row_index
+        self.grid_rowconfigure(spacer_row, weight=1)
+        row_index += 1
+
+        for item in bottom_items:
+            _, icon_image = self._button_icons.get(item.key, (None, None))
+            button = ctk.CTkButton(
+                self,
+                text=item.label,
+                width=self._expanded_width - 24,
+                anchor="w",
+                command=lambda k=item.key: self._handle_select(k),
+                height=BUTTON_HEIGHT,
+                fg_color=VS_SIDEBAR,
+                hover_color=VS_SURFACE_ALT,
+                text_color=VS_TEXT,
+                font=button_font,
+                border_width=1,
+                border_color=VS_BORDER,
+                image=icon_image,
+                compound="left" if icon_image is not None else "center",
+            )
+            button.grid(row=row_index, column=0, padx=12, pady=12, sticky="ew")
+            self._buttons[item.key] = button
+            row_index += 1
+
+        if not bottom_items:
+            self.grid_rowconfigure(spacer_row, weight=1)
 
         self._selection_key: str | None = None
+        self._update_buttons_for_state(self._expanded_width)
 
     def select(self, key: str) -> None:
         if key not in self._buttons:
@@ -115,13 +164,7 @@ class CollapsibleNav(ctk.CTkFrame):
             text="☰" if not self._is_collapsed else "➤",
             width=new_width - 24,
         )
-        for item in self._items:
-            button = self._buttons[item.key]
-            if self._is_collapsed:
-                text = item.icon_text or item.label[:2].upper()
-                button.configure(text=text, anchor="center", width=new_width - 24)
-            else:
-                button.configure(text=item.label, anchor="w", width=new_width - 24)
+        self._update_buttons_for_state(new_width)
 
         self.update_idletasks()
 
@@ -150,6 +193,51 @@ class CollapsibleNav(ctk.CTkFrame):
 
     def refresh_layout(self):
         """Refresh navigation layout without changing state"""
-        # Reapply current collapsed state
-        if hasattr(self, 'is_collapsed'):
-            self.set_collapsed(self.is_collapsed)
+        target_width = self._collapsed_width if self._is_collapsed else self._expanded_width
+        self.configure(width=target_width)
+        self._toggle_button.configure(
+            text="☰" if not self._is_collapsed else "➤",
+            width=target_width - 24,
+        )
+        self._update_buttons_for_state(target_width)
+
+    def _update_buttons_for_state(self, current_width: int) -> None:
+        target_width = current_width - 24
+        for item in self._items:
+            button = self._buttons[item.key]
+            _, icon_image = self._button_icons.get(item.key, (None, None))
+            if self._is_collapsed:
+                if icon_image is not None:
+                    button.configure(
+                        text="",
+                        image=icon_image,
+                        compound="center",
+                        anchor="center",
+                        width=target_width,
+                    )
+                else:
+                    text = item.icon_text or item.label[:2].upper()
+                    button.configure(
+                        text=text,
+                        image=None,
+                        compound="center",
+                        anchor="center",
+                        width=target_width,
+                    )
+            else:
+                if icon_image is not None:
+                    button.configure(
+                        text=item.label,
+                        image=icon_image,
+                        compound="left",
+                        anchor="w",
+                        width=target_width,
+                    )
+                else:
+                    button.configure(
+                        text=item.label,
+                        image=None,
+                        compound="center",
+                        anchor="w",
+                        width=target_width,
+                    )

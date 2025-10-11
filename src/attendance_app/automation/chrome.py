@@ -23,7 +23,7 @@ except ImportError as exc:  # pragma: no cover - missing dependency
         "webdriver-manager is required for Chrome automation support."
     ) from exc
 
-from attendance_app.config.settings import settings
+from attendance_app.config.settings import settings, user_settings_store
 
 
 class ChromeAutomationError(RuntimeError):
@@ -45,9 +45,17 @@ class ChromeRemoteController:
     def __post_init__(self) -> None:  # pragma: no cover - simple path preparation
         self._user_data_dir.mkdir(parents=True, exist_ok=True)
         if self._binary_path is None:
+            manual_path = user_settings_store.get("chrome_binary_path")
+            if manual_path:
+                candidate = Path(manual_path)
+                if candidate.exists():
+                    self._binary_path = candidate
+        if self._binary_path is None:
             self._binary_path = self._discover_chrome_binary()
         if self._binary_path is None:
-            raise ChromeAutomationError("Google Chrome executable not found. Set CHROME_BINARY_PATH.")
+            raise ChromeAutomationError(
+                "Google Chrome executable not found. Configure the path under Settings > Chrome Binary Path."
+            )
 
     def open_browser(self) -> webdriver.Chrome:
         """Ensure the remote Chrome instance is running and return a connected WebDriver."""
