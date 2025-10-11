@@ -195,16 +195,15 @@ class AutoGraderView(ctk.CTkFrame):
 
         header_row = ctk.CTkFrame(panel, fg_color=VS_SURFACE, corner_radius=12)
         header_row.grid(row=1, column=0, sticky="ew", padx=24, pady=(0, 8))
-        column_weights = (2, 1, 2, 1, 1)
+        column_weights = (2, 3, 1, 1)
         for index, weight in enumerate(column_weights):
             header_row.grid_columnconfigure(index, weight=weight, uniform="auto_session_cols")
 
         columns = [
             ("Chapter", 0, "w"),
-            ("Week", 1, "center"),
-            ("Day & time", 2, "w"),
-            ("Attendance", 3, "center"),
-            ("Graded", 4, "center"),
+            ("Day & time", 1, "w"),
+            ("Attendance", 2, "center"),
+            ("Graded", 3, "center"),
         ]
         for text, column, anchor in columns:
             justification = "left" if anchor == "w" else "center"
@@ -634,8 +633,6 @@ class AutoGraderView(ctk.CTkFrame):
                 row_frame.grid_columnconfigure(col_index, weight=weight, uniform="auto_session_cols")
 
             chapter = session.get("chapter_code") or "—"
-            week_number = session.get("week_number")
-            week = f"{week_number}" if week_number is not None else "—"
             weekday_label = day_lookup.get(session.get("weekday_index"), "Day ?")
             start_hour = session.get("start_hour")
             end_hour = session.get("end_hour")
@@ -649,10 +646,9 @@ class AutoGraderView(ctk.CTkFrame):
 
             values = [
                 (chapter, 0, "w", VS_TEXT),
-                (week, 1, "center", VS_TEXT),
-                (schedule, 2, "w", VS_TEXT),
-                (str(attendance_total), 3, "center", VS_TEXT_MUTED),
-                (f"{graded_total}/{attendance_total}" if attendance_total else "0/0", 4, "center", VS_TEXT_MUTED),
+                (schedule, 1, "w", VS_TEXT),
+                (str(attendance_total), 2, "center", VS_TEXT_MUTED),
+                (f"{graded_total}/{attendance_total}" if attendance_total else "0/0", 3, "center", VS_TEXT_MUTED),
             ]
 
             row_info: dict[str, Any] = {
@@ -870,7 +866,6 @@ class AutoGraderView(ctk.CTkFrame):
 
         weekday_label = WEEKDAY_LABELS.get(session.get("weekday_index"), f"Day {session.get('weekday_index')}")
         chapter = session.get("chapter_code", "?")
-        week = session.get("week_number")
         start_hour = session.get("start_hour")
         end_hour = session.get("end_hour")
         time_range = "—"
@@ -878,8 +873,11 @@ class AutoGraderView(ctk.CTkFrame):
             time_range = f"{int(start_hour):02d}:00-{int(end_hour):02d}:00"
 
         if self._session_title is not None:
-            self._session_title.configure(text=f"{weekday_label} {time_range} · C{chapter} · W{week}")
-        self._summary_var.set(f"Chapter {chapter} · Week {week} · {len(self._attendance_records)} students")
+            self._session_title.configure(text=f"{weekday_label} {time_range} · C{chapter}")
+
+        student_count = len(self._attendance_records)
+        student_label = "student" if student_count == 1 else "students"
+        self._summary_var.set(f"Chapter {chapter} · {student_count} {student_label}")
 
     # ------------------------------------------------------------------
     # Automation actions

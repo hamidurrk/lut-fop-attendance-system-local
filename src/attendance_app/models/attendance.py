@@ -29,7 +29,6 @@ class Student:
 @dataclass(slots=True)
 class AttendanceSession:
     chapter_code: str
-    week_number: int
     weekday_index: int
     start_hour: int
     end_hour: int
@@ -39,7 +38,7 @@ class AttendanceSession:
 
     def session_key(self) -> str:
         return (
-            f"{self.chapter_code}-W{self.week_number:02d}-D{self.weekday_index}-"
+            f"{self.chapter_code}-D{self.weekday_index}-"
             f"{self.start_hour:02d}-{self.end_hour:02d}-{self.campus_name}-{self.room_code}"
         )
 

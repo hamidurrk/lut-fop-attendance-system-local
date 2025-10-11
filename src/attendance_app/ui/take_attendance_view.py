@@ -39,8 +39,6 @@ CAMPUS_OPTIONS: tuple[str, ...] = ("Lappeenranta", "Lahti")
 
 
 class TakeAttendanceView(ctk.CTkFrame):
-    WEEK_OPTIONS = tuple(str(week) for week in range(1, 15))
-
     def __init__(
         self,
         master,
@@ -104,7 +102,6 @@ class TakeAttendanceView(ctk.CTkFrame):
         self.selected_template_label = StringVar(value="No session templates")
         self.selected_template_id = IntVar(value=0)
         self.chapter_var = StringVar()
-        self.week_var = StringVar(value=self.WEEK_OPTIONS[0])
 
         self._templates: list[SessionTemplate] = []
         self._chrome_buttons: list[ctk.CTkButton] = []
@@ -459,7 +456,7 @@ class TakeAttendanceView(ctk.CTkFrame):
             border_color=VS_DIVIDER,
         )
         form_card.grid(row=2, column=0, padx=32, pady=(0, 16), sticky="ew")
-        form_card.grid_columnconfigure((0, 1), weight=1)
+        form_card.grid_columnconfigure(0, weight=1)
 
         ctk.CTkLabel(form_card, text="Chapter", font=label_font, text_color=VS_TEXT).grid(
             row=0, column=0, padx=24, pady=(20, 6), sticky="w"
@@ -475,33 +472,16 @@ class TakeAttendanceView(ctk.CTkFrame):
             font=body_font,
             height=42,
         )
-        chapter_entry.grid(row=1, column=0, padx=24, pady=(0, 20), sticky="ew")
-
-        ctk.CTkLabel(form_card, text="Week", font=label_font, text_color=VS_TEXT).grid(
-            row=0, column=1, padx=24, pady=(20, 6), sticky="w"
-        )
-        week_menu = ctk.CTkOptionMenu(
-            form_card,
-            values=self.WEEK_OPTIONS,
-            variable=self.week_var,
-            fg_color=VS_BG,
-            button_color=VS_ACCENT,
-            button_hover_color=VS_ACCENT_HOVER,
-            text_color=VS_TEXT,
-            font=body_font,
-            width=150,
-            height=42,
-        )
-        week_menu.grid(row=1, column=1, padx=24, pady=(0, 20), sticky="ew")
+        chapter_entry.grid(row=0, column=0, padx=24, pady=(20, 6), sticky="e")
 
         ctk.CTkLabel(
             form_card,
-            text="Select a session and confirm the chapter/week to open a new attendance session.",
+            text="Select a session and confirm the chapter to open a new attendance session.",
             font=hint_font,
             text_color=VS_TEXT_MUTED,
             justify="left",
             wraplength=520,
-        ).grid(row=2, column=0, columnspan=2, padx=24, pady=(0, 20), sticky="w")
+        ).grid(row=2, column=0, padx=24, pady=(0, 20), sticky="w")
 
         self._status_label = ctk.CTkLabel(
             frame,
@@ -1100,14 +1080,13 @@ class TakeAttendanceView(ctk.CTkFrame):
     def _handle_start_session(self) -> None:
         template_id = self.selected_template_id.get()
         chapter = self.chapter_var.get().strip()
-        week_value = self.week_var.get()
 
         if template_id <= 0:
             self._update_status_message("Select a session first.", tone="warning")
             return
 
-        if not chapter or not week_value:
-            self._update_status_message("Chapter and week are required.", tone="warning")
+        if not chapter:
+            self._update_status_message("Chapter is required.", tone="warning")
             return
 
         template = self._service.get_session_template(template_id)
@@ -1117,7 +1096,6 @@ class TakeAttendanceView(ctk.CTkFrame):
 
         session = AttendanceSession(
             chapter_code=chapter,
-            week_number=int(week_value),
             weekday_index=template.weekday_index,
             start_hour=template.start_hour,
             end_hour=template.end_hour,
@@ -1188,14 +1166,13 @@ class TakeAttendanceView(ctk.CTkFrame):
         self._active_session_id = session_id
         self._session_info_var.set(
             (
-                f"Chapter {session.chapter_code} "
-                f"Week {session.week_number}\n"
+                f"Chapter {session.chapter_code}\n"
             )
         )
         self._update_status_message(f"Session started. Ready for attendance.", tone="success")
         self._bonus_info_var.set(
             (
-                f"Chapter {session.chapter_code} · Week {session.week_number}\n"
+                f"Chapter {session.chapter_code}\n"
             )
         )
         self._set_bonus_status("Ready to record bonus points.")

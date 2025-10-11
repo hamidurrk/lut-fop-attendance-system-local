@@ -130,7 +130,7 @@ class CollapsibleNav(ctk.CTkFrame):
                 border_width=1,
                 border_color=VS_BORDER,
                 image=icon_image,
-                compound="left" if icon_image is not None else "center",
+                compound="center" if icon_image is not None else "center",
             )
             button.grid(row=row_index, column=0, padx=12, pady=12, sticky="ew")
             self._buttons[item.key] = button
@@ -192,7 +192,6 @@ class CollapsibleNav(ctk.CTkFrame):
                 button.configure(text_color=VS_TEXT)
 
     def refresh_layout(self):
-        """Refresh navigation layout without changing state"""
         target_width = self._collapsed_width if self._is_collapsed else self._expanded_width
         self.configure(width=target_width)
         self._toggle_button.configure(
@@ -214,6 +213,7 @@ class CollapsibleNav(ctk.CTkFrame):
                         compound="center",
                         anchor="center",
                         width=target_width,
+                        border_spacing=0,
                     )
                 else:
                     text = item.icon_text or item.label[:2].upper()
@@ -223,6 +223,7 @@ class CollapsibleNav(ctk.CTkFrame):
                         compound="center",
                         anchor="center",
                         width=target_width,
+                        border_spacing=0,
                     )
             else:
                 if icon_image is not None:
@@ -232,6 +233,7 @@ class CollapsibleNav(ctk.CTkFrame):
                         compound="left",
                         anchor="w",
                         width=target_width,
+                        border_spacing=6,
                     )
                 else:
                     button.configure(
@@ -240,4 +242,5 @@ class CollapsibleNav(ctk.CTkFrame):
                         compound="center",
                         anchor="w",
                         width=target_width,
+                        border_spacing=6,
                     )

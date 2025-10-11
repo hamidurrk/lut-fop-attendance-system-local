@@ -28,8 +28,7 @@ class AttendanceService:
             duplicate = connection.execute(
                 """
                 SELECT id FROM attendance_sessions
-                WHERE chapter_code = ?
-                  AND week_number = ?
+                                WHERE chapter_code = ?
                   AND weekday_index = ?
                   AND start_hour = ?
                   AND end_hour = ?
@@ -38,7 +37,6 @@ class AttendanceService:
                 """,
                 (
                     session.chapter_code.strip(),
-                    session.week_number,
                     session.weekday_index,
                     session.start_hour,
                     session.end_hour,
@@ -53,13 +51,12 @@ class AttendanceService:
             cursor = connection.execute(
                 """
                 INSERT INTO attendance_sessions (
-                    chapter_code, week_number, weekday_index, start_hour, end_hour,
+                    chapter_code, weekday_index, start_hour, end_hour,
                     campus_name, room_code
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?)
                 """,
                 (
                     session.chapter_code.strip(),
-                    session.week_number,
                     session.weekday_index,
                     session.start_hour,
                     session.end_hour,
@@ -134,7 +131,6 @@ class AttendanceService:
             "SELECT",
             "    s.id,",
             "    s.chapter_code,",
-            "    s.week_number,",
             "    s.weekday_index,",
             "    s.start_hour,",
             "    s.end_hour,",
@@ -177,7 +173,7 @@ class AttendanceService:
         with self._database.connect() as connection:
             rows = connection.execute(
                 """
-                SELECT id, chapter_code, week_number, weekday_index,
+          SELECT id, chapter_code, weekday_index,
                        start_hour, end_hour, campus_name, room_code, created_at
                   FROM attendance_sessions
               ORDER BY created_at DESC
@@ -224,7 +220,6 @@ class AttendanceService:
                        ar.t_point,
                        ar.status,
                        s.chapter_code,
-                       s.week_number,
                        s.campus_name,
                        s.room_code,
                        s.start_hour,

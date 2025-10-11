@@ -93,5 +93,4 @@ def refresh_settings_from_store() -> None:
         ),
     )
 
-
-print(settings.__print__())
+# print(settings.__print__())

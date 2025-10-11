@@ -217,17 +217,16 @@ class ManageRecordsView(ctk.CTkFrame):
         )
         header_row.grid(row=1, column=0, sticky="ew", padx=40, pady=(0, 8))
 
-        column_weights = (2, 1, 2, 1, 1, 1)
+        column_weights = (2, 3, 1, 1, 1)
         for col_index, weight in enumerate(column_weights):
             header_row.grid_columnconfigure(col_index, weight=weight, uniform="session_cols")
 
         columns = [
             ("Chapter", 0, "w"),
-            ("Week", 1, "center"),
-            ("Day & time", 2, "w"),
-            ("Attendance", 4, "center"),
-            ("Bonus", 5, "center"),
-            ("Status", 3, "center"),
+            ("Day & time", 1, "w"),
+            ("Status", 2, "center"),
+            ("Attendance", 3, "center"),
+            ("Bonus", 4, "center"),
         ]
         for text, col, anchor in columns:
             justification = "left" if anchor == "w" else "center"
@@ -642,7 +641,7 @@ class ManageRecordsView(ctk.CTkFrame):
 
         day_lookup = WEEKDAY_LABELS
 
-        column_weights = (2, 1, 2, 1, 1, 1)
+        column_weights = (2, 3, 1, 1, 1)
 
         for index, session in enumerate(sessions):
             row_frame = ctk.CTkFrame(
@@ -657,8 +656,6 @@ class ManageRecordsView(ctk.CTkFrame):
                 row_frame.grid_columnconfigure(col_index, weight=weight, uniform="session_cols")
 
             chapter = session.get("chapter_code") or "—"
-            week_number = session.get("week_number")
-            week = f"W{week_number}" if week_number is not None else "—"
             weekday_label = day_lookup.get(session.get("weekday_index"), "Day ?")
             start_hour = session.get("start_hour")
             end_hour = session.get("end_hour")
@@ -680,11 +677,10 @@ class ManageRecordsView(ctk.CTkFrame):
 
             values = [
                 (chapter, 0, "w", VS_TEXT),
-                (week, 1, "center", VS_TEXT),
-                (schedule, 2, "w", VS_TEXT),
-                (attendance_summary, 4, "center", VS_TEXT_MUTED),
-                (bonus_summary, 5, "center", VS_TEXT_MUTED),
-                (status_display, 3, "center", status_color),
+                (schedule, 1, "w", VS_TEXT),
+                (status_display, 2, "center", status_color),
+                (attendance_summary, 3, "center", VS_TEXT_MUTED),
+                (bonus_summary, 4, "center", VS_TEXT_MUTED),
             ]
 
             row_info: dict[str, Any] = {
@@ -837,14 +833,12 @@ class ManageRecordsView(ctk.CTkFrame):
             return
 
         chapter = session.get("chapter_code")
-        week_number = session.get("week_number")
         weekday_index = session.get("weekday_index")
         start_hour = session.get("start_hour")
         end_hour = session.get("end_hour")
         campus = session.get("campus_name")
 
         chapter_display = chapter or "—"
-        week_display = f"Week {week_number}" if week_number is not None else "Week —"
         weekday_label = WEEKDAY_LABELS.get(weekday_index, "—")
         if start_hour is not None and end_hour is not None:
             time_display = self._format_hour_range(int(start_hour), int(end_hour))
@@ -853,16 +847,12 @@ class ManageRecordsView(ctk.CTkFrame):
         campus_display = campus or "—"
 
         if chapter:
-            if week_number is not None:
-                title_text = f"{weekday_label} · {time_display} · C{chapter_display} · W{week_number}"
-            else:
-                title_text = f"{weekday_label} · {time_display} · C{chapter_display}"
+            title_text = f"{weekday_label} · {time_display} · C{chapter_display}"
         else:
             title_text = "Session details"
 
         metadata_parts = [
             f"Chapter {chapter_display}",
-            week_display,
             campus_display,
         ]
         metadata_text = " · ".join(metadata_parts)
@@ -1573,9 +1563,6 @@ class ManageRecordsView(ctk.CTkFrame):
         else:
             chapter_token = "C-"
 
-        week_value = session.get("week_number")
-        week_token = f"W{week_value}" if week_value is not None else "W-"
-
         weekday_label = WEEKDAY_LABELS.get(session.get("weekday_index"), "Weekday")
 
         start_hour = session.get("start_hour")
@@ -1583,7 +1570,7 @@ class ManageRecordsView(ctk.CTkFrame):
         start_text = f"{int(start_hour):02d}:00" if start_hour is not None else "00:00"
         end_text = f"{int(end_hour):02d}:00" if end_hour is not None else "00:00"
 
-        raw_name = f"{chapter_token}-{week_token} {weekday_label} {start_text}-{end_text}"
+        raw_name = f"{chapter_token} {weekday_label} {start_text}-{end_text}"
 
         sanitized = raw_name.replace("·", "-").replace("\x7f", "")
         sanitized = sanitized.replace(":", ".")
@@ -1658,7 +1645,7 @@ class ManageRecordsView(ctk.CTkFrame):
     def _describe_session(self, session: dict[str, Any]) -> str:
         weekday_label = WEEKDAY_LABELS.get(session.get("weekday_index"), f"Day {session.get('weekday_index')}")
         return (
-            f"{session.get('chapter_code')} · Week {session.get('week_number')} · {weekday_label}"
+            f"{session.get('chapter_code')} · {weekday_label}"
             f" {session.get('start_hour'):02d}:00-{session.get('end_hour'):02d}:00"
         )
 
@@ -1669,7 +1656,7 @@ class ManageRecordsView(ctk.CTkFrame):
         )
         bonus_line = f"Bonus {session.get('bonus_confirmed_count', 0)}/{session.get('bonus_count', 0)}"
         return (
-            f"{session.get('chapter_code')} · W{session.get('week_number')} · {weekday_label}\n"
+            f"{session.get('chapter_code')} · {weekday_label}\n"
             f"{attendance_line} · {bonus_line}"
         )
 
