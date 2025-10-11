@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import threading
 import time
+import unicodedata
 from contextlib import suppress
 from typing import Any, Callable, Optional
 
@@ -9,6 +10,22 @@ SCAN_INTERVAL_SECONDS = 0.08
 DEDUP_INTERVAL_SECONDS = 0.8
 PREVIEW_INTERVAL_SECONDS = 0.07
 PREVIEW_MAX_WIDTH = 480
+
+
+def _decode_symbol_data(raw: bytes | str) -> str:
+    if not raw:
+        return ""
+
+    if isinstance(raw, str):
+        decoded = raw
+    else:
+        try:
+            decoded = raw.decode("utf-8")
+        except UnicodeDecodeError:
+            decoded = raw.decode("utf-8", errors="ignore")
+
+    normalized = unicodedata.normalize("NFC", decoded)
+    return normalized.strip()
 
 
 class QRScanner:
@@ -26,16 +43,7 @@ class QRScanner:
         on_error: Optional[Callable[[str], None]] = None,
         on_frame: Optional[Callable[[Any], None]] = None,
     ) -> bool:
-        """Start the background scanner loop.
-
-        Args:
-            on_payload: Callback invoked with each decoded QR payload.
-            on_error: Optional callback for fatal errors.
-
-        Returns:
-            True if the scanner was started or is already running.
-            False if initialization failed (for example, missing dependencies).
-        """
+        """Start the background scanner loop."""
 
         with self._lock:
             if self._running:
@@ -43,18 +51,18 @@ class QRScanner:
 
             try:
                 import cv2  # type: ignore[import-not-found]
-                from pyzbar import pyzbar  # type: ignore[import-not-found]
-            except ImportError as exc:
+                import zxingcpp  # type: ignore[import-not-found]
+            except ImportError:
                 if on_error:
                     on_error(
-                        "Missing QR scanner dependencies. Install OpenCV (cv2) and pyzbar to enable scanning."
+                        "Missing QR scanner dependencies. Install OpenCV (cv2) and zxing-cpp to enable scanning."
                     )
                 return False
 
             self._stop_event.clear()
 
             def _runner() -> None:
-                self._run_loop(on_payload, on_error, on_frame, cv2, pyzbar)
+                self._run_loop(on_payload, on_error, on_frame, cv2, zxingcpp)
 
             self._thread = threading.Thread(target=_runner, daemon=True)
             self._running = True
@@ -85,7 +93,7 @@ class QRScanner:
         on_error: Optional[Callable[[str], None]],
         on_frame: Optional[Callable[[Any], None]],
         cv2_module,
-        pyzbar_module,
+        zxing_module,
     ) -> None:
         capture = None
         last_payload: Optional[str] = None
@@ -122,12 +130,33 @@ class QRScanner:
                         pass
                     last_preview = now
 
-                decoded = pyzbar_module.decode(frame)
+                try:
+                    decoded = zxing_module.read_barcodes(
+                        frame,
+                        formats=zxing_module.BarcodeFormat.QRCode,
+                        try_rotate=True,
+                        try_downscale=True,
+                        text_mode=zxing_module.TextMode.HRI,
+                    )
+                except Exception:
+                    decoded = []
+
                 if not decoded:
                     time.sleep(SCAN_INTERVAL_SECONDS)
                     continue
                 for obj in decoded:
-                    payload = obj.data.decode("utf-8", errors="ignore").strip()
+                    if hasattr(obj, "valid") and not obj.valid:
+                        continue
+                    if getattr(obj, "error", None):
+                        continue
+
+                    payload_text = getattr(obj, "text", "")
+                    payload = _decode_symbol_data(payload_text)
+                    if not payload:
+                        payload_bytes = getattr(obj, "bytes", b"") or b""
+                        if not isinstance(payload_bytes, (bytes, bytearray)):
+                            payload_bytes = bytes(payload_bytes)
+                        payload = _decode_symbol_data(payload_bytes)
                     if not payload:
                         continue
 

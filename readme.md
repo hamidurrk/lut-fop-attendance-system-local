@@ -108,15 +108,9 @@ Artifacts are emitted to `dist/`. Pass `--onefile` to produce a single binary wh
 
 ## Configuration notes
 
-- Default settings are defined in `src/attendance_app/config/settings.py`. Override values via environment variables or `.env` files if needed.
+- Default settings are defined in `src/attendance_app/config/settings.py`. Override values via `Settings` UI panel if needed.
 - `data/attendance.db` can be replaced with a shared network path for multi-machine access; update the configuration accordingly.
 - Theme colours are centralised in `src/attendance_app/ui/theme.py` so additional views stay visually consistent.
-
-## Roadmap
-
-- Implement QR scanning with OpenCV and PyZbar, wiring decoded student IDs into the active session.
-- Complete the Attendance history and Auto-grader tabs with dedicated CustomTkinter views and service integration.
-- Enrich Selenium automation to pull roster data and push attendance results to Moodle.
 
 ## Contributing
 

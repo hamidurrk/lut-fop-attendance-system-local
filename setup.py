@@ -20,7 +20,7 @@ setup(
     install_requires=[
         "customtkinter>=5.2.0",
         "opencv-python>=4.8.0",
-        "pyzbar>=0.1.9",
+    "zxing-cpp>=2.3.0",
         "Pillow>=10.0.0",
         "selenium>=4.13.0",
         "python-dotenv>=1.0.0",
