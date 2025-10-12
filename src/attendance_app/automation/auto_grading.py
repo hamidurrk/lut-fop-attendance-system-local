@@ -270,6 +270,17 @@ def run_auto_grading(
         return AutoGradingResult(False, tuple(messages), should_stop=False)
     
     try:
+        # get current value
+        current_value = grade_input.get_attribute("value")
+        # check if the cell is empty or not
+        if current_value and current_value.strip():
+            log(
+                f"Grade input for student ID '{student_id}' is not empty (current value: '{current_value}'). Skipping entry.",
+                "warning",
+            )
+            sleep(1)
+            return AutoGradingResult(False, tuple(messages), should_stop=False)
+        
         grade_input.clear()
         grade_input.send_keys(str(total_points))
         log(
@@ -292,14 +303,24 @@ def run_auto_grading(
                 )
                 return AutoGradingResult(False, tuple(messages), should_stop=False)
             
-            # save_button.click()
 
+            current_url = driver.current_url
+            save_button.click()
+            try:
+                WebDriverWait(driver, 180).until(EC.url_changes(current_url))
+            except TimeoutException:
+                log(
+                    f"Timed out waiting for user to save after entering grade for student ID '{student_id}'.",
+                    "warning",
+                )
+                return AutoGradingResult(False, tuple(messages), should_stop=False)
+            
             # highlight the button instead of clicking
-            driver.execute_script("arguments[0].style.border='3px solid yellow'", save_button)
+            # driver.execute_script("arguments[0].style.border='3px solid yellow'", save_button)
             sleep(1)  
 
             log(
-                f"Auto-saved grade for student ID '{student_id}'.",
+                f"Auto-saved grade for student ID '{student_id}'",
                 "info",
             )
         except Exception:  
@@ -310,7 +331,7 @@ def run_auto_grading(
             f"Grade entry for student ID '{student_id}' is ready. Please save manually.",
             "info",
         )
-        # wait fot the current_url to change (indicating a save or navigation)
+        # wait for the current_url to change (indicating a save or navigation)
         current_url = driver.current_url
         try:
             WebDriverWait(driver, 180).until(EC.url_changes(current_url))
@@ -323,7 +344,7 @@ def run_auto_grading(
 
     sleep(1)
     log(
-        f"{header_text} | Grading completed\n'{student_name} | {student_id}\n{total_points}.",
+        f"{header_text} | Grading completed\n{student_name} | {student_id}\nTotal Points: {total_points}",
         "success",
     )
     return AutoGradingResult(True, tuple(messages), should_stop=False)
