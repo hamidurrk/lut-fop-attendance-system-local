@@ -5,6 +5,7 @@ import threading
 from typing import Any, Callable, Iterable
 
 import customtkinter as ctk
+import tkinter.messagebox as messagebox
 
 from attendance_app.automation import (
     AutoGradingMessage,
@@ -519,25 +520,25 @@ class AutoGraderView(ctk.CTkFrame):
         self._log_textbox = log_textbox
         self._render_log_entries(reset=True)
 
-        status_title = ctk.CTkLabel(
-            panel,
-            text="Status",
-            font=ctk.CTkFont(size=14, weight="bold"),
-            text_color=VS_TEXT,
-            anchor="w",
-        )
-        status_title.grid(row=6, column=0, columnspan=4, sticky="w", padx=20, pady=(0, 6))
+        # status_title = ctk.CTkLabel(
+        #     panel,
+        #     text="Status",
+        #     font=ctk.CTkFont(size=14, weight="bold"),
+        #     text_color=VS_TEXT,
+        #     anchor="w",
+        # )
+        # status_title.grid(row=6, column=0, columnspan=4, sticky="w", padx=20, pady=(0, 6))
 
-        self._automation_status_label = ctk.CTkLabel(
-            panel,
-            textvariable=self._status_var,
-            font=ctk.CTkFont(size=13),
-            text_color=self._status_color,
-            anchor="w",
-            justify="left",
-            wraplength=360,
-        )
-        self._automation_status_label.grid(row=7, column=0, columnspan=4, sticky="ew", padx=20, pady=(0, 20))
+        # self._automation_status_label = ctk.CTkLabel(
+        #     panel,
+        #     textvariable=self._status_var,
+        #     font=ctk.CTkFont(size=13),
+        #     text_color=self._status_color,
+        #     anchor="w",
+        #     justify="left",
+        #     wraplength=360,
+        # )
+        # self._automation_status_label.grid(row=7, column=0, columnspan=4, sticky="ew", padx=20, pady=(0, 20))
 
         prompt_frame = ctk.CTkFrame(panel, fg_color=VS_SURFACE_ALT, corner_radius=12)
         prompt_frame.grid(row=8, column=0, columnspan=4, sticky="ew", padx=20, pady=(0, 20))
@@ -1188,7 +1189,6 @@ class AutoGraderView(ctk.CTkFrame):
         row["labels"]["status"].configure(text=display)
 
     def _handle_automation_launch_failure(self, message: str) -> None:
-        """Handle any automation startup or runtime failure by resetting state."""
         print(f"Automation error: {message}")
         self._automation_running = False
         self._stop_requested = False
@@ -1199,7 +1199,6 @@ class AutoGraderView(ctk.CTkFrame):
         self._resolve_prompt(False)
         self._current_processing_id = None
         
-        # Clear any highlight from the currently processing record
         if self._current_processing_id is not None:
             self.after(0, lambda: self._update_processing_state(self._current_processing_id, False))
         
@@ -1394,11 +1393,9 @@ class AutoGraderView(ctk.CTkFrame):
         else:
             timestamp = datetime.now().strftime("%H:%M:%S")
 
-        # Add timestamp with precise boundaries
         header_text = f"[{timestamp}] "
         textbox.insert("end", header_text, ("log_timestamp",))
 
-        # Add message body with precise boundaries
         body_text = entry.get("text", "")
         formatted_body = body_text.replace("\n", "\n   ")
         if formatted_body:
@@ -1434,26 +1431,39 @@ class AutoGraderView(ctk.CTkFrame):
     # ------------------------------------------------------------------
     # Confirmation prompt helpers
     # ------------------------------------------------------------------
-    def _prompt_user_confirmation(self, message: str) -> bool:
+    def _prompt_user_confirmation(self, message: str) -> bool:        
+        dialog_result = {"confirmed": False}
+        
+        def show_dialog():
+            try:
+                result = messagebox.askquestion(
+                    title="Auto-Grading Confirmation",
+                    message=message,
+                    icon="question"
+                )
+                dialog_result["confirmed"] = (result == "yes")
+            except Exception as e:
+                print(f"Dialog error: {e}")
+                dialog_result["confirmed"] = False
+            finally:
+                if self._prompt_event:
+                    self._prompt_event.set()
+        
         active_event = self._prompt_event
         if active_event is not None and not active_event.is_set():
             raise RuntimeError("A confirmation prompt is already pending.")
 
         prompt_event = threading.Event()
-        response_holder: dict[str, bool] = {}
         self._prompt_event = prompt_event
-        self._prompt_response_holder = response_holder
-
-        def show_prompt() -> None:
-            self._show_prompt(message)
-
-        self.after(0, show_prompt)
+        
+        self.after(0, show_dialog)
+        
         prompt_event.wait()
-
-        response = response_holder.get("response", False)
+        
+        response = dialog_result.get("confirmed", False)
         self._prompt_event = None
-        self._prompt_response_holder = None
-        return bool(response)
+        
+        return response
 
     def _show_prompt(self, message: str) -> None:
         if self._prompt_label is not None:

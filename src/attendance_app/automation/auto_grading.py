@@ -36,7 +36,6 @@ class AutoGradingSessionContext:
             self.is_confirmed = bool(self.prompt_callback(message))
         return bool(self.is_confirmed)
 
-
 @dataclass(slots=True)
 class AutoGradingMessage:
 
@@ -214,8 +213,8 @@ def run_auto_grading(
         header_text = page_header.find_element(By.TAG_NAME, "h1").text if page_header else ""
 
         confirmation_message = (
-            f"Is this the correct grading page for correct chapter?: {header_text} "
-            "Select 'Yes' to continue or 'No' to stop grading."
+            f"Is this the correct grading page for correct chapter?:\n'{header_text}'\n"
+            "\nSelect 'Yes' to continue or 'No' to stop grading."
         )
         try:
             is_confirmed = context.ensure_confirmation(confirmation_message)
@@ -305,9 +304,9 @@ def run_auto_grading(
             
 
             current_url = driver.current_url
-            # save_button.click()
+            save_button.click()
             # highlight the button instead of clicking
-            driver.execute_script("arguments[0].style.border='3px solid yellow'", save_button)
+            # driver.execute_script("arguments[0].style.border='3px solid yellow'", save_button)
 
             try:
                 WebDriverWait(driver, 180).until(EC.url_changes(current_url))

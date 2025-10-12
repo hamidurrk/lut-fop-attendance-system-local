@@ -279,7 +279,6 @@ class TakeAttendanceView(ctk.CTkFrame):
         self._set_qr_preview_border(None)
 
     def _handle_auto_record_toggle(self) -> None:
-        # Reset the last auto-record payload so the next scan can trigger a recording
         self._qr_last_auto_record_payload = None
 
     # ------------------------------------------------------------------
