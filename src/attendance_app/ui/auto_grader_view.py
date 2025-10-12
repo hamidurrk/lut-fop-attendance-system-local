@@ -40,8 +40,6 @@ LOG_TIMESTAMP_COLOR = "#FBBF24"
 AutoGradingHandler = Callable[[ChromeRemoteController, str, str, int, bool, AutoGradingSessionContext], AutoGradingResult | bool]
 
 class AutoGraderView(ctk.CTkFrame):
-    """Browse confirmed sessions and run automated grading."""
-
     def __init__(
         self,
         master: Any,
@@ -110,6 +108,11 @@ class AutoGraderView(ctk.CTkFrame):
         self._prompt_event: threading.Event | None = None
         self._prompt_response_holder: dict[str, bool] | None = None
 
+        self._wrapper = None
+        self._detail_column = None
+        self._automation_column = None
+        self._using_row_layout = False
+
         self._build_layout()
         self._load_sessions()
         self._update_controls_state()
@@ -149,6 +152,7 @@ class AutoGraderView(ctk.CTkFrame):
         if self._list_page is not None:
             self._list_page.grid()
         if self._detail_page is not None:
+            self.winfo_toplevel().unbind("<Configure>")
             self._detail_page.grid_remove()
         self._showing_detail = False
         if was_detail and self._on_detail_close is not None:
@@ -164,6 +168,8 @@ class AutoGraderView(ctk.CTkFrame):
             self._list_page.grid_remove()
         if self._detail_page is not None:
             self._detail_page.grid()
+            self.winfo_toplevel().bind("<Configure>", self._update_responsive_layout)
+            self.after(100, self._update_responsive_layout)
         if not self._showing_detail and self._on_detail_open is not None:
             self._on_detail_open()
         self._showing_detail = True
@@ -238,18 +244,22 @@ class AutoGraderView(ctk.CTkFrame):
         wrapper = ctk.CTkFrame(parent, fg_color=VS_SURFACE_ALT, corner_radius=18)
         wrapper.grid(row=0, column=0, sticky="nsew", padx=12, pady=12)
         wrapper.grid_rowconfigure(0, weight=1)
+        wrapper.grid_rowconfigure(1, weight=0)  
         wrapper.grid_columnconfigure(0, weight=3)
         wrapper.grid_columnconfigure(1, weight=2)
+        self._wrapper = wrapper
 
         detail_column = ctk.CTkFrame(wrapper, fg_color="transparent")
         detail_column.grid(row=0, column=0, sticky="nsew", padx=(24, 12), pady=24)
         detail_column.grid_rowconfigure(3, weight=1)
         detail_column.grid_columnconfigure(0, weight=1)
+        self._detail_column = detail_column
 
         automation_column = ctk.CTkFrame(wrapper, fg_color="transparent")
         automation_column.grid(row=0, column=1, sticky="nsew", padx=(12, 24), pady=24)
         automation_column.grid_rowconfigure(0, weight=1)
         automation_column.grid_columnconfigure(0, weight=1)
+        self._automation_column = automation_column
 
         self._build_detail_column(detail_column)
         self._build_automation_panel(automation_column)
@@ -322,7 +332,7 @@ class AutoGraderView(ctk.CTkFrame):
         columns = [
             ("Student", 0, 2),
             ("Student ID", 1, 1),
-            ("Total points", 2, 1),
+            ("Total pts", 2, 1),
             ("Status", 3, 1),
         ]
         for text, column, weight in columns:
@@ -1517,3 +1527,44 @@ class AutoGraderView(ctk.CTkFrame):
         if self._back_button is not None:
             back_enabled = self._showing_detail and not self._automation_running
             self._back_button.configure(state="normal" if back_enabled else "disabled")
+
+    def _update_responsive_layout(self, event=None):
+        if not self._showing_detail or self._wrapper is None:
+            return
+            
+        current_width = self._wrapper.winfo_width()
+        
+        if current_width < 1680 and not self._using_row_layout:
+            self._switch_to_row_layout()
+        elif current_width >= 1680 and self._using_row_layout:
+            self._switch_to_column_layout()
+
+    def _switch_to_column_layout(self):
+        if self._wrapper is None or self._detail_column is None or self._automation_column is None:
+            return
+            
+        self._wrapper.grid_rowconfigure(0, weight=1)
+        self._wrapper.grid_rowconfigure(1, weight=0)
+        
+        self._detail_column.grid_forget()
+        self._automation_column.grid_forget()
+        
+        self._detail_column.grid(row=0, column=0, sticky="nsew", padx=(24, 12), pady=24)
+        self._automation_column.grid(row=0, column=1, sticky="nsew", padx=(12, 24), pady=24)
+        
+        self._using_row_layout = False
+
+    def _switch_to_row_layout(self):
+        if self._wrapper is None or self._detail_column is None or self._automation_column is None:
+            return
+        
+        self._wrapper.grid_rowconfigure(0, weight=1)
+        self._wrapper.grid_rowconfigure(1, weight=1)
+            
+        self._detail_column.grid_forget()
+        self._automation_column.grid_forget()
+        
+        self._detail_column.grid(row=0, column=0, sticky="nsew", padx=24, pady=(24, 12))
+        self._automation_column.grid(row=1, column=0, sticky="nsew", padx=24, pady=(12, 24))
+        
+        self._using_row_layout = True

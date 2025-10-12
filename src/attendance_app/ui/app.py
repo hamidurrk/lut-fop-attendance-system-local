@@ -138,14 +138,11 @@ class AttendanceApp:
         self._show_view(initial_view)
         self._nav.select(initial_view)
 
-        # Load saved window position if available
         self._restore_window_position()
         self._root.after(0, self._maximize_window)
 
-        # Bind window movement/configure events
         self._root.bind("<Configure>", self._handle_window_configure)
 
-        # Save position on close
         self._root.protocol("WM_DELETE_WINDOW", self._on_close)
 
     def _show_view(self, key: str) -> None:
@@ -163,7 +160,6 @@ class AttendanceApp:
                 self._handle_auto_grader_detail_close()
 
     def register_auto_grading_handler(self, handler: AutoGradingRoutine | None) -> None:
-        """Allow external code to override the default automation routine."""
         self._auto_grader_view.register_grading_handler(handler)
 
     def _handle_settings_saved(self, _updated: dict[str, object]) -> None:
@@ -215,14 +211,21 @@ class AttendanceApp:
         self._nav.expand()
         self._auto_grader_view.refresh()
 
+    def _set_flexible_window_size(self):
+        self._root.minsize(780, 640)  
+
+    def _restore_normal_window_size(self):
+        self._root.minsize(1080, 640)  
+
     def _handle_auto_grader_detail_open(self) -> None:
         self._nav.collapse()
+        self._set_flexible_window_size()
 
     def _handle_auto_grader_detail_close(self) -> None:
         self._nav.expand()
+        self._restore_normal_window_size()
 
     def _restore_window_position(self):
-        """Restore window position from saved settings"""
         try:
             config_dir = os.path.join(os.path.expanduser("~"), ".lut_attendance")
             os.makedirs(config_dir, exist_ok=True)
@@ -231,41 +234,32 @@ class AttendanceApp:
             if os.path.exists(config_file):
                 with open(config_file, 'r') as f:
                     position = json.load(f)
-                    # Verify the position is still valid for any monitor
                     if self._is_position_on_screen(position.get('x'), position.get('y')):
                         self._root.geometry(f"{position.get('width', 1280)}x{position.get('height', 720)}+{position['x']}+{position['y']}")
         except Exception:
-            # Fall back to default if anything goes wrong
             pass
 
     def _is_position_on_screen(self, x, y):
-        """Check if coordinates are visible on any monitor"""
         if x is None or y is None:
             return False
 
-        # Simple check - could be enhanced with actual monitor bounds
-        return 0 <= x < 3000 and 0 <= y < 2000  # Reasonable bounds for most setups
+        return 0 <= x < 3000 and 0 <= y < 2000  
 
     def _handle_window_configure(self, event):
-        """Stabilize layout during window moves/resizes"""
-        # Only process if it's an actual size/position change
         if hasattr(self, '_last_geometry') and self._last_geometry == self._root.geometry():
             return
 
         self._last_geometry = self._root.geometry()
 
-        # Force navigation to maintain its state
         if hasattr(self, 'nav_frame') and hasattr(self.nav_frame, 'refresh_layout'):
             self.nav_frame.refresh_layout()
 
     def _on_close(self):
-        """Save window position before closing"""
         try:
             config_dir = os.path.join(os.path.expanduser("~"), ".lut_attendance")
             os.makedirs(config_dir, exist_ok=True)
             config_file = os.path.join(config_dir, "window_position.json")
 
-            # Get current geometry
             geometry = self._root.geometry()
             matches = re.match(r'(\d+)x(\d+)\+(\d+)\+(\d+)', geometry)
             if matches:
@@ -273,7 +267,7 @@ class AttendanceApp:
                 with open(config_file, 'w') as f:
                     json.dump({'width': width, 'height': height, 'x': x, 'y': y}, f)
         except Exception:
-            pass  # Don't prevent closing if saving fails
+            pass  
 
         self._root.destroy()
 
@@ -287,5 +281,4 @@ class AttendanceApp:
             else:
                 self._root.attributes("-zoomed", True)
         except Exception:
-            # Ignore platforms that don't support zoomed state
             pass
