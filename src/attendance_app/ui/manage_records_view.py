@@ -27,7 +27,10 @@ from attendance_app.ui.theme import (
     VS_WARNING,
 )
 
+# Bonus table highlight palette
 BONUS_HIGHLIGHT_BG = "#1b2d66"
+BONUS_UNMATCHED_BG = "#5c1f1f"
+BONUS_FUZZY_BG = "#5c4f1f"
 
 class ManageRecordsView(ctk.CTkFrame):
     """Interactive management view for past attendance sessions."""
@@ -67,6 +70,9 @@ class ManageRecordsView(ctk.CTkFrame):
         self._requires_bonus_alignment = False
         self._highlight_bonus_var = ctk.BooleanVar(value=False)
         self._attendance_row_frames: dict[int, dict[str, Any]] = {}
+        self._bonus_row_frames: dict[int, dict[str, Any]] = {}
+        self._unmatched_bonus_rows: set[int] = set()
+        self._fuzzy_bonus_rows: set[int] = set()
 
         self._filter_title_font = ctk.CTkFont(size=20, weight="bold")
         self._filter_label_font = ctk.CTkFont(size=15)
@@ -111,14 +117,29 @@ class ManageRecordsView(ctk.CTkFrame):
     def _build_filters(self, parent: ctk.CTkFrame) -> None:
         filter_container = ctk.CTkFrame(parent, fg_color="transparent")
         filter_container.grid(row=0, column=0, sticky="ew", padx=18, pady=(18, 12))
-        filter_container.grid_columnconfigure(0, weight=0)  
-        filter_container.grid_columnconfigure(1, weight=1)  
-        filter_container.grid_columnconfigure(2, weight=1)  
+        filter_container.grid_columnconfigure(0, weight=0)
+        filter_container.grid_columnconfigure(1, weight=1)
+        filter_container.grid_columnconfigure(2, weight=0)
         
         filters = ctk.CTkFrame(filter_container, fg_color=VS_SURFACE, corner_radius=14, 
                               border_width=1, border_color=VS_DIVIDER)
         filters.grid(row=0, column=0, padx=0, pady=0)
         filters.grid_columnconfigure((0, 1), weight=1)
+
+        refresh_filters_button = ctk.CTkButton(
+            filter_container,
+            text="Refresh",
+            command=self._refresh_session_list,
+            fg_color=VS_SURFACE,
+            hover_color=VS_SURFACE_ALT,
+            border_width=1,
+            border_color=VS_DIVIDER,
+            text_color=VS_TEXT,
+            font=ctk.CTkFont(size=15, weight="bold"),
+            height=44,
+            width=130,
+        )
+        refresh_filters_button.grid(row=0, column=2, sticky="ne", padx=(12, 0))
 
         title = ctk.CTkLabel(
             filters,
@@ -818,6 +839,9 @@ class ManageRecordsView(ctk.CTkFrame):
         self._initial_totals.clear()
         self._initial_bonuses.clear()
         self._attendance_row_frames.clear()
+        self._bonus_row_frames.clear()
+        self._unmatched_bonus_rows.clear()
+        self._fuzzy_bonus_rows.clear()
         self._update_session_header()
         self._summary_var.set("")
         self._show_list_view()
@@ -1063,12 +1087,64 @@ class ManageRecordsView(ctk.CTkFrame):
                 labels["name"].configure(text_color=VS_TEXT)
                 labels["id"].configure(text_color=id_default_color)
 
+    def _clear_bonus_highlights(self) -> None:
+        for info in self._bonus_row_frames.values():
+            frame: ctk.CTkFrame = info["frame"]
+            if frame.winfo_exists():
+                frame.configure(fg_color=info["default_fg"])
+            for name, label in info["labels"].items():
+                if label.winfo_exists():
+                    label.configure(text_color=info["default_colors"][name])
+
+        self._unmatched_bonus_rows.clear()
+        self._fuzzy_bonus_rows.clear()
+
+    def _apply_bonus_highlight(self, row_index: int, background: str) -> None:
+        info = self._bonus_row_frames.get(row_index)
+        if not info:
+            return
+
+        frame: ctk.CTkFrame = info["frame"]
+        if frame.winfo_exists():
+            frame.configure(fg_color=background)
+
+        for label in info["labels"].values():
+            if label.winfo_exists():
+                label.configure(text_color=VS_TEXT)
+
+    def _reapply_bonus_highlights(self) -> None:
+        for index in list(self._unmatched_bonus_rows):
+            self._apply_bonus_highlight(index, BONUS_UNMATCHED_BG)
+
+        for index in list(self._fuzzy_bonus_rows):
+            if index in self._unmatched_bonus_rows:
+                continue
+            self._apply_bonus_highlight(index, BONUS_FUZZY_BG)
+
+    def _set_bonus_highlight_state(self, unmatched_rows: list[int], fuzzy_rows: list[int]) -> None:
+        self._clear_bonus_highlights()
+
+        for idx in unmatched_rows:
+            self._unmatched_bonus_rows.add(int(idx))
+
+        for idx in fuzzy_rows:
+            idx = int(idx)
+            if idx in self._unmatched_bonus_rows:
+                continue
+            self._fuzzy_bonus_rows.add(idx)
+
+        self._reapply_bonus_highlights()
+
     def _populate_bonus_table(self) -> None:
         if not hasattr(self, "_bonus_table") or self._bonus_table is None:
             return
 
+        self._clear_bonus_highlights()
+
         for child in self._bonus_table.winfo_children():
             child.destroy()
+
+        self._bonus_row_frames.clear()
 
         if not self._bonus_summary:
             ctk.CTkLabel(
@@ -1093,21 +1169,39 @@ class ManageRecordsView(ctk.CTkFrame):
             name = entry.get("student_name") or "Unnamed"
             total_bonus = int(entry.get("total_bonus", 0) or 0)
 
-            ctk.CTkLabel(
+            name_label = ctk.CTkLabel(
                 row,
                 text=name,
                 text_color=VS_TEXT,
                 anchor="w",
                 font=label_font,
-            ).grid(row=0, column=0, sticky="ew", padx=(12, 8), pady=6)
-            ctk.CTkLabel(
+            )
+            name_label.grid(row=0, column=0, sticky="ew", padx=(12, 8), pady=6)
+
+            value_label = ctk.CTkLabel(
                 row,
                 text=str(total_bonus),
                 text_color=VS_TEXT,
                 anchor="e",
                 font=value_font,
                 width=numeric_width,
-            ).grid(row=0, column=1, sticky="e", padx=(4, 12), pady=6)
+            )
+            value_label.grid(row=0, column=1, sticky="e", padx=(4, 12), pady=6)
+
+            self._bonus_row_frames[index] = {
+                "frame": row,
+                "default_fg": row_color,
+                "labels": {
+                    "name": name_label,
+                    "value": value_label,
+                },
+                "default_colors": {
+                    "name": VS_TEXT,
+                    "value": VS_TEXT,
+                },
+            }
+
+        self._reapply_bonus_highlights()
 
     def _handle_bonus_entry_change(self, record_id: int) -> None:
         if record_id in self._suspend_entry_updates:
@@ -1325,12 +1419,16 @@ class ManageRecordsView(ctk.CTkFrame):
                 used_rows.add(int(row))
                 used_cols.add(int(col))
 
+        all_bonus_indices = list(range(bonus_count))
+
         if not assignments:
+            self._set_bonus_highlight_state(all_bonus_indices, [])
             self._set_status("No confident matches found. Adjust totals manually if needed.", tone="warning")
             return
 
         updates_applied = 0
-        matched_rows = set()
+        matched_rows: set[int] = set()
+        fuzzy_rows: set[int] = set()
 
         for row, col, score in assignments:
             bonus_entry = self._bonus_summary[row]
@@ -1343,8 +1441,14 @@ class ManageRecordsView(ctk.CTkFrame):
             current_total = int(record.get("t_point", 0) or 0)
             current_bonus = int(record.get("b_point", 0) or 0)
 
+            bonus_name = (bonus_entry.get("student_name") or "").strip()
+            record_name = (record.get("student_name") or "").strip() or (record.get("student_id") or "").strip()
+
+            matched_rows.add(row)
+            if bonus_name != record_name:
+                fuzzy_rows.add(row)
+
             if new_total == current_total and bonus_value == current_bonus:
-                matched_rows.add(row)
                 continue
 
             record["b_point"] = bonus_value
@@ -1365,9 +1469,11 @@ class ManageRecordsView(ctk.CTkFrame):
                 self._suspend_entry_updates.discard(record_id)
 
             updates_applied += 1
-            matched_rows.add(row)
 
-        unmatched_rows = [index for index in range(bonus_count) if index not in matched_rows]
+        unmatched_rows = [index for index in all_bonus_indices if index not in matched_rows]
+        fuzzy_list = sorted(fuzzy_rows)
+
+        self._set_bonus_highlight_state(unmatched_rows, fuzzy_list)
 
         if updates_applied:
             self._set_unsaved_changes(True)
@@ -1377,7 +1483,13 @@ class ManageRecordsView(ctk.CTkFrame):
                 preview = ", ".join(names[:3])
                 if len(names) > 3:
                     preview += "…"
-                message += f" Unmatched bonus: {preview}."
+                message += f"\nUnmatched bonus: Red means no match."
+            if fuzzy_list:
+                names = [self._bonus_summary[idx].get("student_name") or "Unnamed" for idx in fuzzy_list]
+                preview = ", ".join(names[:3])
+                if len(names) > 3:
+                    preview += "…"
+                message += f"\nName review: Yellow means not exact match but similar."
             self._set_status(message + " Save to persist changes.", tone="success")
         else:
             message = "Auto-match found existing alignments; no changes were necessary."
@@ -1386,7 +1498,13 @@ class ManageRecordsView(ctk.CTkFrame):
                 preview = ", ".join(names[:3])
                 if len(names) > 3:
                     preview += "…"
-                message += f" Remaining unmatched: {preview}."
+                message += f"\nRemaining unmatched: Red means no match."
+            if fuzzy_list:
+                names = [self._bonus_summary[idx].get("student_name") or "Unnamed" for idx in fuzzy_list]
+                preview = ", ".join(names[:3])
+                if len(names) > 3:
+                    preview += "…"
+                message += f"\nName review: Yellow means not exact match but similar."
             self._set_status(message, tone="info")
 
         self._update_summary()
@@ -1493,6 +1611,8 @@ class ManageRecordsView(ctk.CTkFrame):
             self._selected_session["attendance_count"] = len(self._attendance_records)
             if session_confirmed:
                 self._selected_session["status"] = "confirmed"
+
+        self._clear_bonus_highlights()
 
         confirmation_message = (
             f"Saved totals for {update_count} record(s); attendance confirmed."
