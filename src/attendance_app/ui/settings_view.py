@@ -365,8 +365,8 @@ class SettingsView(ctk.CTkFrame):
         payload["app_data_dir"] = str(app_data_dir) if app_data_dir is not None else None
 
         updated = self._store.update(**payload)
-        self._set_status("Settings saved successfully.", tone="success")
         self.refresh()
+        self._set_status("Settings saved successfully.", tone="success")
 
         if self._on_settings_saved is not None:
             self._on_settings_saved(updated)

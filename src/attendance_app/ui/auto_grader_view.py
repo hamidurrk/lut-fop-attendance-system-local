@@ -188,10 +188,10 @@ class AutoGraderView(ctk.CTkFrame):
         header = ctk.CTkLabel(
             panel,
             text="Sessions",
-            font=ctk.CTkFont(size=18, weight="bold"),
+            font=ctk.CTkFont(size=28, weight="bold"),
             text_color=VS_TEXT,
         )
-        header.grid(row=0, column=0, sticky="w", padx=24, pady=(20, 8))
+        header.grid(row=0, column=0, sticky="w", padx=24, pady=(20))
 
         header_row = ctk.CTkFrame(panel, fg_color=VS_SURFACE, corner_radius=12)
         header_row.grid(row=1, column=0, sticky="ew", padx=24, pady=(0, 8))
@@ -202,8 +202,8 @@ class AutoGraderView(ctk.CTkFrame):
         columns = [
             ("Chapter", 0, "w"),
             ("Day & time", 1, "w"),
-            ("Attendance", 2, "center"),
-            ("Graded", 3, "center"),
+            ("Attendance", 2, "w"),
+            ("Graded/Total", 3, "w")
         ]
         for text, column, anchor in columns:
             justification = "left" if anchor == "w" else "center"
@@ -277,11 +277,11 @@ class AutoGraderView(ctk.CTkFrame):
             border_width=1,
             border_color=VS_DIVIDER,
             height=40,
-            width=140,
+            width=120,
             font=ctk.CTkFont(size=14, weight="bold"),
             anchor="w",
         )
-        self._back_button.grid(row=0, column=0, sticky="w", padx=(0, 16), pady=(0, 12))
+        self._back_button.grid(row=0, column=0, sticky="w", padx=(0, 20), pady=(0, 12))
 
         self._session_title = ctk.CTkLabel(
             top_bar,
@@ -618,7 +618,7 @@ class AutoGraderView(ctk.CTkFrame):
 
         day_lookup = WEEKDAY_LABELS
 
-        column_weights = (2, 1, 2, 1, 1)
+        column_weights = (2, 3, 1, 1)
 
         for index, session in enumerate(sessions):
             row_frame = ctk.CTkFrame(
@@ -1006,64 +1006,69 @@ class AutoGraderView(ctk.CTkFrame):
             prompt_callback=self._prompt_user_confirmation,
             log_callback=self._handle_streamed_log_message,
         )
-
         def worker() -> None:
-            controller = self._chrome_controller
-            if controller is not None:
-                try:
-                    controller.open_browser()
-                except ChromeAutomationError as exc:
-                    self.after(0, lambda msg=f"Chrome launch failed: {exc}": self._handle_automation_launch_failure(msg))
-                    return
-                except Exception as exc:  # pragma: no cover - guard unexpected issues
-                    self.after(0, lambda msg=f"Unexpected Chrome error: {exc}": self._handle_automation_launch_failure(msg))
-                    return
-
-            self.after(0, lambda: self._set_status("Auto-grading in progress…"))
-
-            for record in records_snapshot:
-                if self._stop_requested:
-                    break
-                record_id = int(record.get("id"))
-                status = (record.get("status") or "").lower()
-                if status == "graded":
-                    continue
-
-                pause_event = self._pause_event
-                if pause_event is not None:
-                    pause_event.wait()
-                if self._stop_requested:
-                    break
-
-                self._mark_record_processing(record_id, True)
-                result = self._execute_grading_handler(record, auto_save, session_context)
-                self._mark_record_processing(record_id, False)
-
-                if self._stop_requested:
-                    break
-
-                if result:
+            try:
+                controller = self._chrome_controller
+                if controller is not None:
                     try:
-                        self._service.update_status_for_attendance_records(
-                            session_id=session_id,
-                            record_ids=[record_id],
-                            status="graded",
-                        )
-                    except Exception as exc:  # pragma: no cover - database layer should be reliable
-                        self.after(0, lambda message=f"Failed to update record: {exc}": self._set_status(message, tone="warning"))
+                        controller.open_browser()
+                    except ChromeAutomationError as exc:
+                        self.after(0, lambda msg=f"Chrome launch failed: {exc}": self._handle_automation_launch_failure(msg))
+                        return
+                    except Exception as exc:  # pragma: no cover - guard unexpected issues
+                        self.after(0, lambda msg=f"Unexpected Chrome error: {exc}": self._handle_automation_launch_failure(msg))
+                        return
+
+                self.after(0, lambda: self._set_status("Auto-grading in progress…"))
+
+                for record in records_snapshot:
+                    if self._stop_requested:
+                        break
+                    record_id = int(record.get("id"))
+                    status = (record.get("status") or "").lower()
+                    if status == "graded":
+                        continue
+
+                    pause_event = self._pause_event
+                    if pause_event is not None:
+                        pause_event.wait()
+                    if self._stop_requested:
                         break
 
-                    for stored in self._attendance_records:
-                        if int(stored.get("id")) == record_id:
-                            stored["status"] = "graded"
+                    self._mark_record_processing(record_id, True)
+                    result = self._execute_grading_handler(record, auto_save, session_context)
+                    self._mark_record_processing(record_id, False)
+
+                    if self._stop_requested:
+                        break
+
+                    if result:
+                        try:
+                            self._service.update_status_for_attendance_records(
+                                session_id=session_id,
+                                record_ids=[record_id],
+                                status="graded",
+                            )
+                        except Exception as exc:  # pragma: no cover - database layer should be reliable
+                            self.after(0, lambda message=f"Failed to update record: {exc}": self._set_status(message, tone="warning"))
                             break
 
-                    self._refresh_record_status(record_id, "graded")
-                else:
-                    self._refresh_record_status(record_id, record.get("status") or "recorded")
+                        for stored in self._attendance_records:
+                            if int(stored.get("id")) == record_id:
+                                stored["status"] = "graded"
+                                break
 
-            stopped_flag = self._stop_requested
-            self.after(0, lambda stopped=stopped_flag: self._on_automation_complete(stopped))
+                        self._refresh_record_status(record_id, "graded")
+                    else:
+                        self._refresh_record_status(record_id, record.get("status") or "recorded")
+
+                stopped_flag = self._stop_requested
+                self.after(0, lambda stopped=stopped_flag: self._on_automation_complete(stopped))
+            except Exception as exc:
+                import traceback
+                error_details = traceback.format_exc()
+                print(f"Auto-grading worker thread error: {exc}\n{error_details}")
+                self.after(0, lambda msg=f"Auto-grading failed: {exc}": self._handle_automation_launch_failure(msg))
 
         self._automation_thread = threading.Thread(target=worker, daemon=True)
         self._automation_thread.start()
@@ -1176,6 +1181,8 @@ class AutoGraderView(ctk.CTkFrame):
         row["labels"]["status"].configure(text=display)
 
     def _handle_automation_launch_failure(self, message: str) -> None:
+        """Handle any automation startup or runtime failure by resetting state."""
+        print(f"Automation error: {message}")
         self._automation_running = False
         self._stop_requested = False
         self._automation_paused = False
@@ -1183,8 +1190,15 @@ class AutoGraderView(ctk.CTkFrame):
             self._pause_event.set()
         self._session_context = None
         self._resolve_prompt(False)
+        self._current_processing_id = None
+        
+        # Clear any highlight from the currently processing record
+        if self._current_processing_id is not None:
+            self.after(0, lambda: self._update_processing_state(self._current_processing_id, False))
+        
         self._update_controls_state()
         self._set_status(message, tone="warning")
+        self._append_log_messages([AutoGradingMessage(f"Error: {message}", tone="warning")])
 
     def _on_automation_complete(self, stopped: bool) -> None:
         self._automation_running = False

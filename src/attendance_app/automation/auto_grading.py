@@ -305,7 +305,10 @@ def run_auto_grading(
             
 
             current_url = driver.current_url
-            save_button.click()
+            # save_button.click()
+            # highlight the button instead of clicking
+            driver.execute_script("arguments[0].style.border='3px solid yellow'", save_button)
+
             try:
                 WebDriverWait(driver, 180).until(EC.url_changes(current_url))
             except TimeoutException:
@@ -315,8 +318,6 @@ def run_auto_grading(
                 )
                 return AutoGradingResult(False, tuple(messages), should_stop=False)
             
-            # highlight the button instead of clicking
-            # driver.execute_script("arguments[0].style.border='3px solid yellow'", save_button)
             sleep(1)  
 
             log(

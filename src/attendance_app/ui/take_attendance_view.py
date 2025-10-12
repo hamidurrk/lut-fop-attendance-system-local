@@ -134,7 +134,7 @@ class TakeAttendanceView(ctk.CTkFrame):
         self._qr_scan_border_color = VS_SUCCESS
         self._qr_scan_border_duration_ms: int = 900
         self._qr_border_reset_job: str | None = None
-        self._qr_auto_record_var = ctk.BooleanVar(value=bool(getattr(settings, "qr_auto_record", False)))
+        self._qr_auto_record_var = ctk.BooleanVar(value=bool(getattr(settings, "qr_auto_record", True)))
         self._qr_auto_record_switch: ctk.CTkSwitch | None = None
         self._qr_last_auto_record_payload: Optional[str] = None
         self._qr_stop_fg_color = "#f26d6d"

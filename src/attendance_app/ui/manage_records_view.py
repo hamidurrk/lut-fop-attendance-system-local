@@ -131,7 +131,7 @@ class ManageRecordsView(ctk.CTkFrame):
             text="Refresh",
             command=self._refresh_session_list,
             fg_color=VS_SURFACE,
-            hover_color=VS_SURFACE_ALT,
+            hover_color=VS_BG,
             border_width=1,
             border_color=VS_DIVIDER,
             text_color=VS_TEXT,
@@ -1651,10 +1651,9 @@ class ManageRecordsView(ctk.CTkFrame):
         headers = [
             "Student ID",
             "Student name",
-            "Attendance point",
-            "Bonus point",
-            "Total point",
-            "Recorded at",
+            "Attendance points",
+            "Bonus points",
+            "Total points",
         ]
 
         rows: list[list[Any]] = []
@@ -1666,7 +1665,6 @@ class ManageRecordsView(ctk.CTkFrame):
                     record.get("a_point"),
                     record.get("b_point"),
                     record.get("t_point"),
-                    record.get("recorded_at"),
                 ]
             )
 
