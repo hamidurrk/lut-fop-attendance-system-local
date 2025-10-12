@@ -264,12 +264,10 @@ class AutoGraderView(ctk.CTkFrame):
         top_bar.grid_columnconfigure(1, weight=1)
         top_bar.grid_columnconfigure(2, weight=0)
 
-        back_text = "Sessions" if self._back_icon is not None else "◀ Sessions"
+        back_text = "◀ Sessions"
         self._back_button = ctk.CTkButton(
             top_bar,
             text=back_text,
-            image=self._back_icon,
-            compound="left" if self._back_icon is not None else "center",
             command=self._handle_back_to_sessions,
             fg_color=VS_SURFACE,
             hover_color=VS_ACCENT,
@@ -279,7 +277,6 @@ class AutoGraderView(ctk.CTkFrame):
             height=40,
             width=120,
             font=ctk.CTkFont(size=14, weight="bold"),
-            anchor="w",
         )
         self._back_button.grid(row=0, column=0, sticky="w", padx=(0, 20), pady=(0, 12))
 
@@ -291,19 +288,6 @@ class AutoGraderView(ctk.CTkFrame):
             anchor="w",
         )
         self._session_title.grid(row=0, column=1, sticky="w", pady=(0, 12))
-
-        self._emergency_button = ctk.CTkButton(
-            top_bar,
-            text="Emergency stop",
-            command=self._handle_emergency_stop,
-            fg_color="#f26d6d",
-            hover_color="#d95a5a",
-            text_color=VS_TEXT,
-            height=44,
-            width=160,
-            font=ctk.CTkFont(size=15, weight="bold"),
-        )
-        self._emergency_button.grid(row=0, column=2, sticky="e", pady=(0, 12))
 
         info_bar = ctk.CTkFrame(parent, fg_color="transparent")
         info_bar.grid(row=1, column=0, sticky="ew", pady=(0, 6))
@@ -382,11 +366,24 @@ class AutoGraderView(ctk.CTkFrame):
         title = ctk.CTkLabel(
             panel,
             text="Automation",
-            font=ctk.CTkFont(size=18, weight="bold"),
+            font=ctk.CTkFont(size=22, weight="bold"),
             text_color=VS_TEXT,
             anchor="w",
         )
         title.grid(row=0, column=0, columnspan=4, sticky="w", padx=20, pady=(18, 8))
+        
+        self._emergency_button = ctk.CTkButton(
+            panel,
+            text="Emergency Stop",
+            command=self._handle_emergency_stop,
+            fg_color="#f26d6d",
+            hover_color="#d95a5a",
+            text_color=VS_TEXT,
+            height=32,
+            width=140,
+            font=ctk.CTkFont(size=15, weight="bold"),
+        )
+        self._emergency_button.grid(row=0, column=2, sticky="e", padx=20, pady=(18, 8))
 
         description = ctk.CTkLabel(
             panel,
@@ -1225,7 +1222,7 @@ class AutoGraderView(ctk.CTkFrame):
         self._automation_paused = False
         if self._pause_event is not None:
             self._pause_event.set()
-        self._set_status("Emergency stop requested.", tone="warning")
+        self._set_status("Emergency stop requested. Wait please...", tone="warning")
         self._resolve_prompt(False)
         if self._chrome_controller is not None:
             try:
