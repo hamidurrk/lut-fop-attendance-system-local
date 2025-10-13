@@ -3,7 +3,7 @@ from __future__ import annotations
 import csv
 import re
 from pathlib import Path
-from tkinter import filedialog
+from tkinter import filedialog, messagebox
 from typing import Any
 from difflib import SequenceMatcher
 from openpyxl import Workbook
@@ -13,6 +13,7 @@ from scipy.optimize import linear_sum_assignment
 
 from attendance_app.models.attendance import WEEKDAY_LABELS
 from attendance_app.services import AttendanceService
+from attendance_app.ui.utils import load_icon_image
 from attendance_app.ui.theme import (
     VS_ACCENT,
     VS_ACCENT_HOVER,
@@ -73,6 +74,7 @@ class ManageRecordsView(ctk.CTkFrame):
         self._bonus_row_frames: dict[int, dict[str, Any]] = {}
         self._unmatched_bonus_rows: set[int] = set()
         self._fuzzy_bonus_rows: set[int] = set()
+        self._delete_icon_image, self._delete_icon = load_icon_image("delete.png", (20, 20))
 
         self._filter_title_font = ctk.CTkFont(size=20, weight="bold")
         self._filter_label_font = ctk.CTkFont(size=15)
@@ -238,9 +240,12 @@ class ManageRecordsView(ctk.CTkFrame):
         )
         header_row.grid(row=1, column=0, sticky="ew", padx=40, pady=(0, 8))
 
-        column_weights = (2, 3, 1, 1, 1)
+        column_weights = (2, 3, 1, 1, 1, 0)
         for col_index, weight in enumerate(column_weights):
-            header_row.grid_columnconfigure(col_index, weight=weight, uniform="session_cols")
+            if col_index == len(column_weights) - 1:
+                header_row.grid_columnconfigure(col_index, weight=weight, minsize=48)
+            else:
+                header_row.grid_columnconfigure(col_index, weight=weight)
 
         columns = [
             ("Chapter", 0, "w"),
@@ -248,6 +253,7 @@ class ManageRecordsView(ctk.CTkFrame):
             ("Status", 2, "center"),
             ("Attendance", 3, "center"),
             ("Bonus", 4, "center"),
+            ("", 5, "center"),
         ]
         for text, col, anchor in columns:
             justification = "left" if anchor == "w" else "center"
@@ -258,7 +264,16 @@ class ManageRecordsView(ctk.CTkFrame):
                 text_color=VS_TEXT,
                 anchor=anchor,
                 justify=justification,
-            ).grid(row=0, column=col, sticky="ew", padx=(16 if col == 0 else 12, 12 if col < len(columns) - 1 else 16), pady=8)
+                width=36 if col == 5 else 0,
+            ).grid(
+                row=0,
+                column=col,
+                sticky="w",
+                padx=(16 if col == 0 else 12, 12 if col < len(columns) - 1 else 12),
+                pady=8,
+            )
+
+        header_row.grid_columnconfigure(5, weight=0, minsize=48)
 
         self._session_list = ctk.CTkScrollableFrame(
             list_card,
@@ -662,7 +677,7 @@ class ManageRecordsView(ctk.CTkFrame):
 
         day_lookup = WEEKDAY_LABELS
 
-        column_weights = (2, 3, 1, 1, 1)
+        column_weights = (2, 3, 1, 2, 1, 0)
 
         for index, session in enumerate(sessions):
             row_frame = ctk.CTkFrame(
@@ -674,7 +689,10 @@ class ManageRecordsView(ctk.CTkFrame):
             )
             row_frame.grid(row=index, column=0, sticky="ew", padx=16, pady=5)
             for col_index, weight in enumerate(column_weights):
-                row_frame.grid_columnconfigure(col_index, weight=weight, uniform="session_cols")
+                if col_index == len(column_weights) - 1:
+                    row_frame.grid_columnconfigure(col_index, weight=weight, minsize=48)
+                else:
+                    row_frame.grid_columnconfigure(col_index, weight=weight)
 
             chapter = session.get("chapter_code") or "—"
             weekday_label = day_lookup.get(session.get("weekday_index"), "Day ?")
@@ -722,11 +740,13 @@ class ManageRecordsView(ctk.CTkFrame):
                     anchor=anchor,
                     justify=justification,
                 )
+                left_pad = 16 if column == 0 else 12
+                right_pad = 12 if column < len(values) - 1 else 12
                 label.grid(
                     row=0,
                     column=column,
-                    sticky="ew",
-                    padx=(16 if column == 0 else 12, 12 if column < len(values) - 1 else 16),
+                    sticky="w",
+                    padx=(left_pad, right_pad),
                     pady=10,
                 )
                 label.bind("<Button-1>", lambda _event, s=session: self._handle_session_select(s))
@@ -739,6 +759,21 @@ class ManageRecordsView(ctk.CTkFrame):
             row_frame.bind("<Enter>", lambda _event, info=row_info: self._on_session_row_enter(info))
             row_frame.bind("<Leave>", lambda event, info=row_info: self._on_session_row_leave(info, event))
             row_frame.configure(cursor="hand2")
+
+            delete_button = ctk.CTkButton(
+                row_frame,
+                text="",
+                image=self._delete_icon,
+                width=36,
+                height=36,
+                command=lambda s=session: self._confirm_delete_session(s),
+                fg_color="transparent",
+                hover_color="#b3261e",
+                text_color=VS_TEXT,
+            )
+            delete_button.grid(row=0, column=5, sticky="ew", padx=(12, 16), pady=6)
+            delete_button.configure(cursor="hand2")
+            delete_button.bind("<Button-1>", lambda event: "break")
 
             self._session_rows.append(row_info)
 
@@ -806,6 +841,61 @@ class ManageRecordsView(ctk.CTkFrame):
         self._selected_session = session
         self._highlight_selected_session()
         self._load_session_details(session["id"])
+
+    def _confirm_delete_session(self, session: dict[str, Any]) -> None:
+        if not session:
+            return
+
+        session_id = session.get("id")
+        if session_id is None:
+            return
+
+        weekday_label = WEEKDAY_LABELS.get(session.get("weekday_index"), "Day ?")
+        start_hour = session.get("start_hour")
+        end_hour = session.get("end_hour")
+        if start_hour is not None and end_hour is not None:
+            time_range = self._format_hour_range(int(start_hour), int(end_hour))
+        else:
+            time_range = "—"
+
+        chapter = session.get("chapter_code") or "—"
+        campus = session.get("campus_name") or "—"
+        room = session.get("room_code") or "—"
+
+        details = (
+            f"Chapter {chapter}\n"
+            f"{weekday_label} · {time_range}\n"
+            f"{campus} · {room}"
+        )
+
+        message = (
+            "Are you sure you want to delete this session?\n\n"
+            f"{details}\n\n"
+            "This will permanently remove the session and all attendance and bonus records. "
+            "This action cannot be undone."
+        )
+
+        should_delete = messagebox.askyesno(
+            "Delete session?",
+            message,
+            icon="warning",
+        )
+
+        if not should_delete:
+            return
+
+        try:
+            self._service.delete_session(int(session_id))
+        except Exception as exc:  # pragma: no cover - defensive database guard
+            messagebox.showerror("Delete failed", f"Session could not be deleted: {exc}")
+            self._set_status("Failed to delete session.", tone="warning")
+            return
+
+        if self._selected_session and self._selected_session.get("id") == session_id:
+            self._clear_session_selection()
+
+        self._set_status("Session deleted.", tone="success")
+        self._refresh_session_list()
 
     def _show_list_view(self) -> None:
         if self._detail_container is not None:

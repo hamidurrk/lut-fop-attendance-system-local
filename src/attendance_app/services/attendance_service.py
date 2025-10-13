@@ -11,6 +11,10 @@ from attendance_app.config.settings import settings, user_settings_store
 class DuplicateSessionError(RuntimeError):
     """Raised when attempting to create a duplicate attendance session."""
 
+    def __init__(self, message: str, *, session_id: int | None = None) -> None:
+        super().__init__(message)
+        self.session_id = session_id
+
 
 class DuplicateAttendanceError(RuntimeError):
     """Raised when a student has already been logged for the session."""
@@ -46,7 +50,10 @@ class AttendanceService:
             ).fetchone()
 
             if duplicate:
-                raise DuplicateSessionError("An attendance session with these details already exists.")
+                raise DuplicateSessionError(
+                    "An attendance session with these details already exists.",
+                    session_id=int(duplicate["id"]),
+                )
 
             cursor = connection.execute(
                 """
@@ -439,6 +446,22 @@ class AttendanceService:
             connection.execute(
                 "UPDATE attendance_sessions SET status = ? WHERE id = ?",
                 (cleaned_status, session_id),
+            )
+
+    def delete_session(self, session_id: int) -> None:
+        """Remove a session and all related attendance/bonus records."""
+        with self._database.connect() as connection:
+            connection.execute(
+                "DELETE FROM attendance_records WHERE session_id = ?",
+                (session_id,),
+            )
+            connection.execute(
+                "DELETE FROM bonus_records WHERE session_id = ?",
+                (session_id,),
+            )
+            connection.execute(
+                "DELETE FROM attendance_sessions WHERE id = ?",
+                (session_id,),
             )
 
     def confirm_attendance_for_session(self, session_id: int) -> bool:

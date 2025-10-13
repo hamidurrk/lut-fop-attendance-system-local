@@ -30,7 +30,6 @@ from attendance_app.ui.settings_view import SettingsView
 from attendance_app.ui.theme import VS_BG
 from attendance_app.ui.utils import get_asset_path
 
-
 class AttendanceApp:
     def __init__(self) -> None:
         super().__init__()

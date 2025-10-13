@@ -1105,9 +1105,19 @@ class TakeAttendanceView(ctk.CTkFrame):
 
         try:
             session_id = self._service.start_session(session)
-        except DuplicateSessionError:
-            messagebox.showwarning("Duplicate session", "A session with these details already exists.")
-            self._update_status_message("Duplicate session detected.", tone="warning")
+        except DuplicateSessionError as exc:
+            existing_id = getattr(exc, "session_id", None)
+            proceed = messagebox.askyesno(
+                "Session already exists",
+                "A session with these details already exists. Do you want to reopen it?",
+            )
+            if not proceed or existing_id is None:
+                self._update_status_message("Session not opened.", tone="info")
+                return
+
+            self._activate_session(session, existing_id)
+            if self._on_session_started:
+                self._on_session_started()
             return
         except Exception as exc:  # pragma: no cover - guard unexpected issues
             messagebox.showerror("Error", f"Failed to start session: {exc}")
