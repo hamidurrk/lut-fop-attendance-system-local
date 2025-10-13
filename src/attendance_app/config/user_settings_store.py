@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict
 
-DEFAULT_APP_NAME = os.getenv("APP_NAME", "LUT FoP Attendance System")
+DEFAULT_APP_NAME = os.getenv("APP_NAME", "Queue - LUT FoP Attendance System")
 DOCUMENTS_PATH = Path(os.path.expanduser("~")) / "Documents"
 DEFAULT_POINTER_DIR = DOCUMENTS_PATH / DEFAULT_APP_NAME
 DEFAULT_SETTINGS_FILENAME = "user_settings.json"

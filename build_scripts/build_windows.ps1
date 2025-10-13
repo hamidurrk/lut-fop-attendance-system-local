@@ -16,15 +16,30 @@ if (-not (Test-Path $venvPath)) {
 & $pythonExe -m pip install --upgrade pip
 & $pythonExe -m pip install -r (Join-Path $projectRoot 'requirements.txt')
 
+$specDir = Join-Path $projectRoot 'build_scripts'
+$specFile = Join-Path $specDir 'attendance_app.spec'
+
+if (-not (Test-Path $specFile)) {
+    throw "Spec file not found at $specFile"
+}
+
 $pyinstallerArgs = @(
     '--clean',
     '--noconfirm',
-    '--specpath', (Join-Path $projectRoot 'build_scripts'),
-    (Join-Path $projectRoot 'build_scripts' 'attendance_app.spec')
+    $specFile
 )
 
-if ($Mode -eq 'onefile') {
-    $pyinstallerArgs += '--onefile'
+$previousMode = $env:PYINSTALLER_BUILD_MODE
+try {
+    $env:PYINSTALLER_BUILD_MODE = $Mode
+    $env:PYINSTALLER_SPEC_PATH = $specFile
+    & $pythonExe -m PyInstaller @pyinstallerArgs
 }
-
-& $pythonExe -m PyInstaller @pyinstallerArgs
+finally {
+    if ($null -eq $previousMode) {
+        Remove-Item Env:PYINSTALLER_BUILD_MODE -ErrorAction Ignore
+    } else {
+        $env:PYINSTALLER_BUILD_MODE = $previousMode
+    }
+    Remove-Item Env:PYINSTALLER_SPEC_PATH -ErrorAction Ignore
+}

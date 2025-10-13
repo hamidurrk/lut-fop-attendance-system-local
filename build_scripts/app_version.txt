@@ -1,0 +1,36 @@
+# UTF-8
+# PyInstaller version resource
+
+VSVersionInfo(
+    ffi=FixedFileInfo(
+        filevers=(0, 1, 0, 0),
+        prodvers=(0, 1, 0, 0),
+        mask=0x3F,
+        flags=0x0,
+        OS=0x40004,
+        fileType=0x1,
+        subtype=0x0,
+        date=(0, 0),
+    ),
+    kids=[
+        StringFileInfo(
+            [
+                StringTable(
+                    u'040904B0',
+                    [
+                        StringStruct(u'AuthorName', u'Md Hamidur Rahman Khan'),
+                        StringStruct(u'CompanyName', u'LUT University'),
+                        StringStruct(u'FileDescription', u'Made with <3 by Md Hamidur Rahman Khan'),
+                        StringStruct(u'FileVersion', u'0.1.0'),
+                        StringStruct(u'InternalName', u'Queue'),
+                        StringStruct(u'LegalCopyright', u'© 2025 Md Hamidur Rahman Khan'),
+                        StringStruct(u'ProductName', u'Queue'),
+                        StringStruct(u'ProductVersion', u'0.1.0'),
+                        StringStruct(u'Comments', u'Python-based attendance management application'),
+                    ],
+                ),
+            ],
+        ),
+        VarFileInfo([VarStruct(u'Translation', [1033, 1200])]),
+    ],
+)

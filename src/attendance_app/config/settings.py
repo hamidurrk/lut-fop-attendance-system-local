@@ -13,7 +13,7 @@ ENV_PATH = BASE_DIR / ".env"
 load_dotenv(ENV_PATH)
 
 DOCUMENTS_PATH = Path(os.path.expanduser("~")) / "Documents"
-APP_NAME = os.getenv("APP_NAME", "LUT FoP Attendance System")
+APP_NAME = os.getenv("APP_NAME", "Queue - LUT FoP Attendance System")
 user_settings_store = UserSettingsStore()
 
 APP_DATA_DIR = Path(user_settings_store.get("app_data_dir", str(DOCUMENTS_PATH / APP_NAME))).expanduser()
