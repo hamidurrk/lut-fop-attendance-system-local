@@ -8,40 +8,43 @@ Manual attendance tracking quickly becomes tiresome across chapters, rooms, and 
 
 ## Key features
 
-- **Themed, responsive UI**  
-  Dark theme applied across every view, with layouts that adapt to narrow widths. Auto-grader detail view reflows into stacked panels below 1080 px, making side-by-side work with Chrome painless.
-
-- **Navigation that reacts to workflow**  
-  Collapsible sidebar automatically hides while a live session is running; Manage Records view now refreshes session data whenever it opens so instructors always start with the latest totals.
-
-- **Guided session launcher with duplicate guardrails**  
-  Start sessions by choosing campus, weekday, hours, and chapter. If a matching session already exists, Queue offers to reopen it instead of blocking the instructor.
-
 - **Realtime attendance capture**  
-  Manual form with status feedback, recent attendee stream, optional auto-point settings, and QR scanner integration. Bonus tab mirrors the workflow with CodeGrade-handling helpers.
-
-- **Manage Records power tools**  
-  - Auto-match bonus allocations with fuzzy-name detection.
-  - Highlight unmatched (red) or fuzzy (amber) bonuses and clear them automatically after saving.
-  - One-click delete per session with irreversible warning, removing attendance and bonus records together.
+  - Manual form with status feedback, recent attendee stream, auto-point settings, and QR scanner integration. 
+  ![](media/2.png)
+  
+  - Bonus tab mirrors the workflow with CodeGrade-handling helpers.
+  ![](media/3.png)
 
 - **Auto-grader automation workflow**  
   - Launches Chrome via Selenium, opens CodeGrade submissions, and posts results back to the database.
   - Background errors surface in both UI and console with stack traces.
   - Active student row is highlighted and auto-scrolled into view while grading runs.
   - Start/stop/pause controls stay responsive even after failures thanks to improved thread cleanup.
+![](media/6.png)
 
-- **Asset-aware UI utilities**  
-  Central icon loader (`load_icon_image`) keeps buttons consistent, including the new trash control in Manage Records and navigation icons.
 
-- **Reliable service layer**  
-  `AttendanceService` handles deduplication, confirmation, grading status updates, and now session deletion cascades (attendance + bonus records).
+- **Manage Records power tools**  
+  - Auto-match bonus allocations with fuzzy-name detection.
+  - Highlight unmatched (red) or fuzzy (amber) bonuses and clear them automatically after saving.
+![](media/5.png)
 
-- **Extensible automation scaffolding**  
-  Selenium controller, CodeGrade interaction shell, QR automation stubs, and Chrome profile bootstrapping live under `src/attendance_app/automation/`.
+  - One-click delete per session with irreversible warning, removing attendance and bonus records together.
+![](media/4.png)
+
+- **Guided session launcher with duplicate guardrails**  
+  Start sessions by choosing campus, weekday, hours, and chapter. If a matching session already exists, Queue offers to reopen it instead of blocking the instructor.
+![](media/1.png)
+
+- **Themed, responsive UI**  
+  Dark theme applied across every view, with layouts that adapt to narrow widths. Auto-grader detail view reflows into stacked panels below 1080 px, making side-by-side work with Chrome painless.
+![](media/8.png)
+
+- **Settings to change the default parameters**  
+  The instructors can change the default attendance points, default bonus points and other useful values in the settings. This way, the management app can be used in future in case the program implementation requires different grading criteria.
+![](media/7.png)
 
 - **Cross-platform packaging**  
-  PyInstaller scripts for Windows, macOS, and Linux (with one-file modes) plus an assets folder ready for distribution.
+  PyInstaller scripts for Windows, macOS, and Linux (with one-file modes) plus an assets folder ready for distribution. Even though it hasn't been tested on macOS, and Linux yet but the code is written while keeping the cross-platform distribution in mind.
 
 ## Technology stack
 
@@ -114,7 +117,8 @@ The suite covers time formatting utilities and the attendance service logic. Add
 Windows build (PowerShell):
 
 ```powershell
-./build_scripts/build_windows.ps1
+.\build_scripts\build_windows.ps1  # onedir
+.\build_scripts\build_windows.ps1 -Mode onefile  #single exe
 ```
 
 macOS build (not tested):
