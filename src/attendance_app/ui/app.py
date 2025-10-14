@@ -49,6 +49,19 @@ class AttendanceApp:
         self._root.configure(fg_color=VS_BG)
 
         icon_path = get_asset_path("icon.png")
+
+        screen_width = self._root.winfo_screenwidth()
+        min_width, max_width = 1280, 2560
+        min_scale, max_scale = 0.7, 1.0
+        if screen_width >= max_width:
+            scaling_factor = max_scale
+        elif screen_width <= min_width:
+            scaling_factor = min_scale
+        else:
+            scaling_factor = min_scale + (screen_width - min_width) * (max_scale - min_scale) / (max_width - min_width)
+        ctk.set_widget_scaling(scaling_factor)
+        ctk.set_window_scaling(scaling_factor)
+
         self._icon_photo: PhotoImage | None = None
         if icon_path is not None:
             try:

@@ -198,7 +198,7 @@ class SettingsView(ctk.CTkFrame):
         entry = ctk.CTkEntry(
             parent,
             textvariable=variable,
-            width=180,
+            width=60,
             fg_color=VS_BG,
             border_color=VS_BORDER,
             text_color=VS_TEXT,
@@ -222,7 +222,7 @@ class SettingsView(ctk.CTkFrame):
         label.grid(row=row, column=0, sticky="w", padx=28, pady=(0, 6))
 
         field_container = ctk.CTkFrame(parent, fg_color=VS_SURFACE)
-        field_container.grid(row=row, column=1, sticky="ew", padx=(0, 28), pady=(0, 6))
+        field_container.grid(row=row, column=1, sticky="w", padx=(0, 28), pady=(0, 6))
         field_container.grid_columnconfigure(0, weight=1)
         field_container.grid_columnconfigure(1, weight=0)
 
@@ -232,8 +232,9 @@ class SettingsView(ctk.CTkFrame):
             fg_color=VS_BG,
             border_color=VS_BORDER,
             text_color=VS_TEXT,
+            width=540
         )
-        entry.grid(row=0, column=0, sticky="ew", padx=(0, 12))
+        entry.grid(row=0, column=0, sticky="w", padx=(0, 12))
 
         browse_button = ctk.CTkButton(
             field_container,
@@ -268,7 +269,7 @@ class SettingsView(ctk.CTkFrame):
         label.grid(row=row, column=0, sticky="w", padx=28, pady=(0, 6))
 
         field_container = ctk.CTkFrame(parent, fg_color=VS_SURFACE)
-        field_container.grid(row=row, column=1, sticky="ew", padx=(0, 28), pady=(0, 6))
+        field_container.grid(row=row, column=1, sticky="w", padx=(0, 28), pady=(0, 6))
         field_container.grid_columnconfigure(0, weight=1)
         field_container.grid_columnconfigure(1, weight=0)
 
@@ -278,8 +279,9 @@ class SettingsView(ctk.CTkFrame):
             fg_color=VS_BG,
             border_color=VS_BORDER,
             text_color=VS_TEXT,
+            width=540
         )
-        entry.grid(row=0, column=0, sticky="ew", padx=(0, 12))
+        entry.grid(row=0, column=0, sticky="w", padx=(0, 12))
 
         browse_button = ctk.CTkButton(
             field_container,
@@ -290,7 +292,7 @@ class SettingsView(ctk.CTkFrame):
             hover_color=VS_DIVIDER,
             command=self._choose_app_data_dir,
         )
-        browse_button.grid(row=0, column=1)
+        browse_button.grid(row=0, column=1, sticky="w")
 
         helper = (
             "This folder stores the attendance database, Chrome profile, and other generated files. "

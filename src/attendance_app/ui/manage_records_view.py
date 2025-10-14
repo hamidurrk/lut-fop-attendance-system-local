@@ -84,7 +84,6 @@ class ManageRecordsView(ctk.CTkFrame):
 
         self._build_layout()
 
-        # Populate filter options and initial session list
         sessions = self._load_filter_options()
         self._render_session_cards(sessions)
         self._show_list_view()
@@ -181,8 +180,9 @@ class ManageRecordsView(ctk.CTkFrame):
             font=self._filter_label_font,
             dropdown_fg_color=VS_SURFACE,
             dropdown_hover_color=VS_ACCENT,
+            width=200,
         )
-        self._weekday_menu.grid(row=0, column=1, sticky="ew")
+        self._weekday_menu.grid(row=0, column=1, sticky="e")
 
         time_row = ctk.CTkFrame(filters, fg_color="transparent")
         time_row.grid(row=3, column=0, columnspan=2, sticky="ew", padx=18, pady=6)
@@ -204,8 +204,9 @@ class ManageRecordsView(ctk.CTkFrame):
             font=self._filter_label_font,
             dropdown_fg_color=VS_SURFACE,
             dropdown_hover_color=VS_ACCENT,
+            width=200,
         )
-        self._time_menu.grid(row=0, column=1, sticky="ew")
+        self._time_menu.grid(row=0, column=1, sticky="e")
 
         reset_button = ctk.CTkButton(
             filters,
@@ -249,7 +250,7 @@ class ManageRecordsView(ctk.CTkFrame):
 
         columns = [
             ("Chapter", 0, "w"),
-            ("Day & time", 1, "w"),
+            ("Day & time", 1, "center"),
             ("Status", 2, "center"),
             ("Attendance", 3, "center"),
             ("Bonus", 4, "center"),
@@ -264,7 +265,7 @@ class ManageRecordsView(ctk.CTkFrame):
                 text_color=VS_TEXT,
                 anchor=anchor,
                 justify=justification,
-                width=36 if col == 5 else 0,
+                width=30 if col == 5 else 100,
             ).grid(
                 row=0,
                 column=col,
@@ -677,7 +678,7 @@ class ManageRecordsView(ctk.CTkFrame):
 
         day_lookup = WEEKDAY_LABELS
 
-        column_weights = (2, 3, 1, 2, 1, 0)
+        column_weights = (2, 3, 1, 1, 1, 0)
 
         for index, session in enumerate(sessions):
             row_frame = ctk.CTkFrame(
@@ -737,6 +738,7 @@ class ManageRecordsView(ctk.CTkFrame):
                     text=text,
                     font=self._session_table_body_font,
                     text_color=color,
+                    width=100,
                     anchor=anchor,
                     justify=justification,
                 )
